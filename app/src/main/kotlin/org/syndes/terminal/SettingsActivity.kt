@@ -55,7 +55,10 @@ class SettingsActivity : AppCompatActivity() {
                         Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
                     )
                     val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-                    prefs.edit().putString("work_dir_uri", treeUri.toString()).apply()
+                    prefs.edit().apply {
+                        putString("work_dir_uri", treeUri.toString())
+                        putString("current_dir_uri", treeUri.toString())
+                    }.apply()
                     workFolderUriView.text = treeUri.toString()
                 }
             }
