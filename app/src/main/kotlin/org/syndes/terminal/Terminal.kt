@@ -126,6 +126,12 @@ class Terminal {
                       notif           - open notification settings
                       acc             - open account settings
                       dev             - open developer settings
+                      
+                    Script support (syd):
+                      syd list                 - list scripts in work_dir/scripts
+                      syd run <name>           - run script (name or name.syd)
+                      syd stop <script-id>     - stop running script (id returned on start)
+                      run <name>               - alias for 'syd run <name>'
                     """.trimIndent()
                 }
 
@@ -133,6 +139,64 @@ class Terminal {
                     "Info: Syndes Terminal v0.13"
                 }
 
+                // -------------------------
+                // Script commands: syd / run
+                // -------------------------
+                "syd", "script" -> {
+                    // subcommands: list | run <name> | stop <id>
+                    val sub = args.getOrNull(0)?.lowercase()
+                    if (sub == null) {
+                        return "Usage: syd list|run <name>|stop <id>"
+                    }
+                    when (sub) {
+                        "list" -> {
+                            val root = getRootDir(ctx) ?: return "Error: work folder not set."
+                            val scriptsDir = root.findFile("scripts") ?: root
+                            val files = scriptsDir.listFiles().filter { it.isFile }
+                            if (files.isEmpty()) "No scripts found in ${scriptsDir.name ?: "work dir"}"
+                            else files.joinToString("\n") { it.name ?: "?" }
+                        }
+                        "run" -> {
+                            val name = args.drop(1).joinToString(" ").trim()
+                            if (name.isEmpty()) return "Usage: syd run <scriptname>"
+                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found in work_dir/scripts or work root"
+                            // call ScriptHandler to start script (ScriptHandler assumed present)
+                            return try {
+                                ScriptHandler.startScriptFromUri(ctx, scriptDoc.uri)
+                            } catch (t: Throwable) {
+                                "Error: failed to start script: ${t.message ?: "unknown"}"
+                            }
+                        }
+                        "stop" -> {
+                            val id = args.getOrNull(1) ?: return "Usage: syd stop <script-id>"
+                            return try {
+                                ScriptHandler.stopScript(id)
+                            } catch (t: Throwable) {
+                                "Error: failed to stop script: ${t.message ?: "unknown"}"
+                            }
+                        }
+                        else -> {
+                            "Usage: syd list|run <name>|stop <id>"
+                        }
+                    }
+                }
+
+                "run" -> {
+                    // alias for syd run
+                    val name = args.joinToString(" ").trim()
+                    if (name.isEmpty()) return "Usage: run <scriptname>"
+                    val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
+                    return try {
+                        ScriptHandler.startScriptFromUri(ctx, scriptDoc.uri)
+                    } catch (t: Throwable) {
+                        "Error: failed to start script: ${t.message ?: "unknown"}"
+                    }
+                }
+
+                // -------------------------
+                // Rest of existing commands...
+                // (kept unchanged)
+                // -------------------------
                 "echo" -> {
                     if (args.contains(">")) {
                         val index = args.indexOf(">")
@@ -589,7 +653,7 @@ class Terminal {
                         "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
                         "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
                         "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
-                        "notif", "acc", "dev")
+                        "notif", "acc", "dev", "syd", "run")
                     if (knownCommands.contains(cmd)) {
                         "$cmd: built-in command"
                     } else {
@@ -736,6 +800,60 @@ class Terminal {
             "Error: ${t.message ?: "execution failed"}"
         }
     }
+
+    // ---------------------------
+    // Helpers for script discovery
+    // ---------------------------
+    /**
+     * Ищет скрипт по имени в work_dir/scripts, затем в work root.
+     * Поддерживает добавление расширений: .syd, .cyd, .sydscrypt, .txt
+     */
+    private fun findScriptFile(ctx: Context, name: String): DocumentFile? {
+        val root = getRootDir(ctx) ?: return null
+        val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
+
+        // если указан путь (contains '/'), пробуем resolvePath (relative)
+        if (name.contains("/")) {
+            val full = resolvePath(ctx, name)
+            if (full != null) {
+                val (parent, fileName) = full
+                val f = parent.findFile(fileName)
+                if (f != null && f.isFile) return f
+            }
+        }
+
+        val candidates = mutableListOf<String>()
+        if (name.contains('.')) {
+            candidates.add(name)
+        } else {
+            listOf(".syd", ".cyd", ".sydscrypt", ".txt").forEach { ext ->
+                candidates.add("$name$ext")
+            }
+            candidates.add(name) // also exact
+        }
+
+        // search in scriptsDir
+        for (cand in candidates) {
+            val f = scriptsDir.findFile(cand)
+            if (f != null && f.isFile) return f
+        }
+
+        // fallback: search in root directory (non-recursive)
+        for (cand in candidates) {
+            val f = root.findFile(cand)
+            if (f != null && f.isFile) return f
+        }
+
+        // as last resort, try to find any file whose name contains 'name' (case-insensitive) in scriptsDir
+        val match = scriptsDir.listFiles().firstOrNull { it.name?.lowercase()?.contains(name.lowercase()) == true }
+        if (match != null && match.isFile) return match
+
+        return null
+    }
+
+    // ---------------------------
+    // Existing helper methods
+    // ---------------------------
 
     private fun getRootDir(ctx: Context): DocumentFile? {
         val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
