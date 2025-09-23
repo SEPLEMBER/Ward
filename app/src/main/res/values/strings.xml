@@ -2,5 +2,5 @@
     <string name="app_name">Syndes Terminal</string>
     <string name="hint_command">Enter command</string>
     <string name="btn_run">Run</string>
-    <string name="welcome_msg">Welcome to Syndes Terminal!\nType 'help' to see commands.\n</string>
+    <string name="welcome_msg">Welcome to Syndes Terminal!&#10;Type 'help' to see commands.&#10;</string>
 </resources>
