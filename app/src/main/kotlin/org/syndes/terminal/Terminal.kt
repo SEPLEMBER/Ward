@@ -1,6 +1,7 @@
 package org.syndes.terminal
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
@@ -18,6 +19,8 @@ import java.io.InputStream
 import java.io.OutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
+import kotlin.math.max
+import kotlin.math.min
 
 class Terminal {
 
@@ -47,15 +50,17 @@ class Terminal {
         val aliasesStr = prefs.getString("aliases", "") ?: ""
         val aliases = aliasesStr.split(";").filter { it.isNotBlank() }.associate {
             val parts = it.split("=", limit = 2)
-            parts[0].trim().lowercase() to parts[1].trim()
+            parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
         }
 
         // Подставляем алиас, если есть
         if (cmdName in aliases) {
             val aliasCmd = aliases[cmdName]!!
             val aliasTokens = aliasCmd.split("\\s+".toRegex())
-            cmdName = aliasTokens[0].lowercase()
-            args = aliasTokens.drop(1) + args
+            if (aliasTokens.isNotEmpty()) {
+                cmdName = aliasTokens[0].lowercase()
+                args = aliasTokens.drop(1) + args
+            }
         }
 
         return try {
@@ -73,7 +78,7 @@ class Terminal {
                       settings|console- open settings screen
                       clearwork       - clear work folder (SAF) configured in settings (recursive)
                       ls|dir          - list files in current directory
-                      cd <dir>        - change directory (supports .., relative paths)
+                      cd <dir>        - change directory (supports .., relative paths, 'home')
                       pwd             - print working directory path
                       cp <src> <dst>  - copy file/dir (supports relative paths)
                       mv <src> <dst>  - move file/dir (supports relative paths)
@@ -108,30 +113,17 @@ class Terminal {
                       contacts        - open contacts app
                       alarm           - open alarm app
                       calc            - open calculator
-                      vpns            - open VPN settings
-                      btss            - open battery settings
-                      wifi            - open Wi-Fi settings
-                      bts             - open Bluetooth settings
-                      data            - open mobile data settings
-                      apm             - open airplane mode settings
-                      snd             - open sound settings
-                      dsp             - open display settings
-                      apps            - open app settings
-                      stg             - open storage settings
-                      sec             - open security settings
-                      loc             - open location settings
-                      nfc             - open NFC settings
-                      cam             - open camera
-                      clk             - open date/time settings
-                      notif           - open notification settings
-                      acc             - open account settings
-                      dev             - open developer settings
+                      vpns, btss, wifi, bts, data, apm, snd, dsp, apps, stg, sec, loc, nfc, cam, clk, notif, acc, dev
                       
                     Script support (syd):
                       syd list                 - list scripts in work_dir/scripts
                       syd run <name>           - run script (name or name.syd)
                       syd stop <script-id>     - stop running script (id returned on start)
                       run <name>               - alias for 'syd run <name>'
+                      
+                    Extras:
+                      mem [package]            - memory info (overall or per-package PSS when possible)
+                      device                   - device details (CPU/ABI/memory/build)
                     """.trimIndent()
                 }
 
@@ -143,15 +135,15 @@ class Terminal {
                 // Script commands: syd / run
                 // -------------------------
                 "syd", "script" -> {
-                    // subcommands: list | run <name> | stop <id>
+                    // subcommands: list | run <name> | stop <id> | edit <name> | validate <name>
                     val sub = args.getOrNull(0)?.lowercase()
                     if (sub == null) {
-                        return "Usage: syd list|run <name>|stop <id>"
+                        return "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
                     }
                     when (sub) {
                         "list" -> {
                             val root = getRootDir(ctx) ?: return "Error: work folder not set."
-                            val scriptsDir = root.findFile("scripts") ?: root
+                            val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
                             val files = scriptsDir.listFiles().filter { it.isFile }
                             if (files.isEmpty()) "No scripts found in ${scriptsDir.name ?: "work dir"}"
                             else files.joinToString("\n") { it.name ?: "?" }
@@ -160,7 +152,6 @@ class Terminal {
                             val name = args.drop(1).joinToString(" ").trim()
                             if (name.isEmpty()) return "Usage: syd run <scriptname>"
                             val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found in work_dir/scripts or work root"
-                            // call ScriptHandler to start script (ScriptHandler assumed present)
                             return try {
                                 ScriptHandler.startScriptFromUri(ctx, scriptDoc.uri)
                             } catch (t: Throwable) {
@@ -175,8 +166,43 @@ class Terminal {
                                 "Error: failed to stop script: ${t.message ?: "unknown"}"
                             }
                         }
+                        "edit" -> {
+                            val name = args.drop(1).joinToString(" ").trim()
+                            if (name.isEmpty()) return "Usage: syd edit <scriptname>"
+                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
+                            return try {
+                                val editIntent = Intent(Intent.ACTION_EDIT).apply {
+                                    setDataAndType(scriptDoc.uri, "text/plain")
+                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                    if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                val pm = ctx.packageManager
+                                val resolves = pm.queryIntentActivities(editIntent, PackageManager.MATCH_DEFAULT_ONLY)
+                                if (resolves.isNotEmpty()) {
+                                    ctx.startActivity(editIntent)
+                                } else {
+                                    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+                                        setDataAndType(scriptDoc.uri, "text/plain")
+                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                        if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    ctx.startActivity(viewIntent)
+                                }
+                                "Info: opened editor for ${scriptDoc.name}"
+                            } catch (t: Throwable) {
+                                "Error: cannot open editor for ${scriptDoc.name}"
+                            }
+                        }
+                        "validate" -> {
+                            val name = args.drop(1).joinToString(" ").trim()
+                            if (name.isEmpty()) return "Usage: syd validate <scriptname>"
+                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
+                            val content = try { ctx.contentResolver.openInputStream(scriptDoc.uri)?.bufferedReader()?.use { it.readText() } } catch (_: Throwable) { null }
+                            if (content == null) return "Error: cannot read script"
+                            return ScriptHandler.validateScriptText(ctx, content)
+                        }
                         else -> {
-                            "Usage: syd list|run <name>|stop <id>"
+                            "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
                         }
                     }
                 }
@@ -194,8 +220,7 @@ class Terminal {
                 }
 
                 // -------------------------
-                // Rest of existing commands...
-                // (kept unchanged)
+                // Basic commands (files / apps / utils)
                 // -------------------------
                 "echo" -> {
                     if (args.contains(">")) {
@@ -302,10 +327,17 @@ class Terminal {
                 }
 
                 "cd" -> {
-                    val path = if (args.isEmpty()) "." else args.joinToString(" ")
-                    val (newDir, _) = resolvePath(ctx, path, isDir = true) ?: return "Error: invalid path"
-                    setCurrentDir(ctx, newDir)
-                    "Info: changed to ${buildPath(newDir)}"
+                    val path = if (args.isEmpty()) "home" else args.joinToString(" ")
+                    if (path == "home") {
+                        val root = getRootDir(ctx) ?: return "Error: work folder not set."
+                        setCurrentDir(ctx, root)
+                        "Info: changed to ${buildPath(root)}"
+                    } else {
+                        val resolved = resolvePath(ctx, path, isDir = true) ?: return "Error: invalid path"
+                        val (newDir, _) = resolved
+                        setCurrentDir(ctx, newDir)
+                        "Info: changed to ${buildPath(newDir)}"
+                    }
                 }
 
                 "pwd" -> {
@@ -483,6 +515,9 @@ class Terminal {
                     prefs.all.entries.joinToString("\n") { "${it.key}=${it.value}" }
                 }
 
+                // -------------------------
+                // Communication / quick apps
+                // -------------------------
                 "sms" -> {
                     val intent = if (args.isEmpty()) {
                         Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) }
@@ -653,7 +688,7 @@ class Terminal {
                         "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
                         "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
                         "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
-                        "notif", "acc", "dev", "syd", "run")
+                        "notif", "acc", "dev", "syd", "run", "mem", "device")
                     if (knownCommands.contains(cmd)) {
                         "$cmd: built-in command"
                     } else {
@@ -792,6 +827,41 @@ class Terminal {
                     "Info: opening developer settings"
                 }
 
+                // -------------------------
+                // Extras: mem, device
+                // -------------------------
+                "mem" -> {
+                    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager
+                        ?: return "Error: cannot get ActivityManager"
+                    val pkg = args.getOrNull(0)
+                    if (pkg.isNullOrBlank()) {
+                        // overall memory info
+                        val memInfo = ActivityManager.MemoryInfo()
+                        am.getMemoryInfo(memInfo)
+                        "AvailMem: ${memInfo.availMem} bytes\nTotalMem: ${memInfo.totalMem} bytes\nLowMemory: ${memInfo.lowMemory}\nThreshold: ${memInfo.threshold}"
+                    } else {
+                        // try to find running process for package
+                        val running = am.runningAppProcesses ?: return "Error: cannot get running processes"
+                        val proc = running.firstOrNull { it.pkgList?.contains(pkg) == true || it.processName.equals(pkg, ignoreCase = true) }
+                        val pid = proc?.pid
+                        if (pid == null) return "Error: process for package not found (not running)"
+                        val pmi = am.getProcessMemoryInfo(intArrayOf(pid)).firstOrNull()
+                            ?: return "Error: cannot get process memory info"
+                        "PSS: ${pmi.totalPss} KB, PrivateDirty: ${pmi.totalPrivateDirty} KB, SharedDirty: ${pmi.totalSharedDirty} KB"
+                    }
+                }
+
+                "device" -> {
+                    val rt = Runtime.getRuntime()
+                    val sb = StringBuilder()
+                    sb.appendLine("Model: ${Build.MANUFACTURER} ${Build.MODEL}")
+                    sb.appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
+                    sb.appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString(", ")}")
+                    sb.appendLine("CPU cores: ${rt.availableProcessors()}")
+                    sb.appendLine("JVM max mem: ${rt.maxMemory()} bytes, total: ${rt.totalMemory()} bytes, free: ${rt.freeMemory()} bytes")
+                    sb.toString()
+                }
+
                 else -> {
                     "Unknown command: $command"
                 }
@@ -920,19 +990,41 @@ class Terminal {
      * Возвращает пару (родительская папка, имя файла/папки).
      * Если createDirs = true, создаёт промежуточные папки.
      * Если isDir = true, ожидает, что последний компонент - папка.
+     *
+     * Поддерживает абсолютные пути (начинающиеся с '/' или 'home/...'), иначе - относительные к current_dir.
      */
     private fun resolvePath(ctx: Context, path: String, createDirs: Boolean = false, isDir: Boolean = false): Pair<DocumentFile, String>? {
         if (path.isEmpty()) return null
+        val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
         val current = getCurrentDir(ctx) ?: return null
         val root = getRootDir(ctx) ?: return null
 
-        val components = path.split("/").filter { it.isNotEmpty() }
-        var curDir = current
+        val rawComponents = path.split("/").filter { it.isNotEmpty() }
+        val components = rawComponents.toMutableList()
+        var curDir: DocumentFile = current
 
-        for (i in 0 until components.size - if (isDir) 0 else 1) {
+        // Absolute path handling: leading "/" or initial "home"
+        val absolute = path.startsWith("/") || components.firstOrNull()?.equals("home", ignoreCase = true) == true
+        if (absolute) {
+            curDir = root
+            if (components.firstOrNull()?.equals("home", ignoreCase = true) == true) {
+                if (components.size > 0) components.removeAt(0)
+            }
+        } else {
+            // relative - start from current_dir if present (already assigned)
+        }
+
+        // If target itself is root (empty components)
+        if (components.isEmpty()) {
+            return curDir to ""
+        }
+
+        // iterate through components except last (if not isDir)
+        val endIndexExclusive = components.size - if (isDir) 0 else 1
+        for (i in 0 until endIndexExclusive) {
             val comp = components[i]
             when (comp) {
-                "." -> {} // текущая
+                "." -> { /* nop */ }
                 ".." -> {
                     val parent = curDir.parentFile
                     if (parent != null && parent.uri != root.uri) {
@@ -940,12 +1032,12 @@ class Terminal {
                     }
                 }
                 else -> {
-                    val subDir = curDir.findFile(comp)
-                    if (subDir != null && subDir.isDirectory) {
-                        curDir = subDir
+                    val sub = curDir.findFile(comp)
+                    if (sub != null && sub.isDirectory) {
+                        curDir = sub
                     } else if (createDirs) {
-                        val newSubDir = curDir.createDirectory(comp) ?: return null
-                        curDir = newSubDir
+                        val newDir = curDir.createDirectory(comp) ?: return null
+                        curDir = newDir
                     } else {
                         return null
                     }
