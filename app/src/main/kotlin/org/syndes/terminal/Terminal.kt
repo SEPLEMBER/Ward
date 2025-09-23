@@ -39,7 +39,7 @@ class Terminal {
 
         // разбиваем на токены
         val tokens = command.split("\\s+".toRegex())
-        var name = tokens[0].lowercase()
+        var cmdName = tokens[0].lowercase()
         var args = tokens.drop(1)
 
         // Загружаем алиасы
@@ -51,15 +51,15 @@ class Terminal {
         }
 
         // Подставляем алиас, если есть
-        if (name in aliases) {
-            val aliasCmd = aliases[name]!!
+        if (cmdName in aliases) {
+            val aliasCmd = aliases[cmdName]!!
             val aliasTokens = aliasCmd.split("\\s+".toRegex())
-            name = aliasTokens[0].lowercase()
+            cmdName = aliasTokens[0].lowercase()
             args = aliasTokens.drop(1) + args
         }
 
         return try {
-            when (name) {
+            when (cmdName) {
                 "help" -> {
                     """
                     Available commands:
@@ -291,7 +291,7 @@ class Terminal {
                     if (args.isEmpty()) return "Error: mkdir <path>"
                     val dirPath = args[0]
                     val (parent, dirName) = resolvePath(ctx, dirPath, createDirs = true) ?: return "Error: invalid path"
-                    val newDir = parent.createDirectory(dirName) ?: return "Error: cannot create directory"
+                    parent.createDirectory(dirName) ?: return "Error: cannot create directory"
                     "Info: created directory $dirPath"
                 }
 
@@ -299,7 +299,7 @@ class Terminal {
                     if (args.isEmpty()) return "Error: touch <path>"
                     val filePath = args[0]
                     val (parent, fileName) = resolvePath(ctx, filePath, createDirs = true) ?: return "Error: invalid path"
-                    val newFile = parent.createFile("text/plain", fileName) ?: return "Error: cannot create file"
+                    parent.createFile("text/plain", fileName) ?: return "Error: cannot create file"
                     "Info: created file $filePath"
                 }
 
@@ -363,8 +363,8 @@ class Terminal {
                 "du" -> {
                     if (args.isEmpty()) return "Error: du <path>"
                     val path = args[0]
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val target = parent.findFile(name) ?: return "Error: no such file '$path'"
+                    val (parent, entryName) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(entryName) ?: return "Error: no such file '$path'"
                     val size = calculateSize(target)
                     "$size $path"
                 }
@@ -372,8 +372,8 @@ class Terminal {
                 "stat" -> {
                     if (args.isEmpty()) return "Error: stat <path>"
                     val path = args[0]
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val target = parent.findFile(name) ?: return "Error: no such file '$path'"
+                    val (parent, entryName) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(entryName) ?: return "Error: no such file '$path'"
                     val size = target.length()
                     val type = target.type ?: "unknown"
                     val modified = SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(target.lastModified()))
@@ -668,10 +668,13 @@ class Terminal {
                 }
 
                 "sec" -> {
-                    val intent = Intent(Settings.ACTION_SECURITY_SETTINGS)
+                    val intent = Intent(Intent.ACTION_VIEW).apply {
+                        data = Uri.parse("package:${ctx.packageName}")
+                        action = Settings.ACTION_APPLICATION_DETAILS_SETTINGS
+                    }
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
-                    "Info: opening security settings"
+                    "Info: opening security/app details"
                 }
 
                 "loc" -> {
@@ -814,7 +817,7 @@ class Terminal {
                 "." -> {} // текущая
                 ".." -> {
                     val parent = curDir.parentFile
-                    if (parent != null && !parent.uri.equals(root.uri)) {
+                    if (parent != null && parent.uri != root.uri) {
                         curDir = parent
                     }
                 }
