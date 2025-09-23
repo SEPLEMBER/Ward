@@ -1,10 +1,14 @@
 package org.syndes.terminal
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
+import android.os.Build
 import android.os.Process
+import android.os.SystemClock
 import android.provider.AlarmClock
 import android.provider.MediaStore
 import android.provider.Settings
@@ -46,25 +50,34 @@ class Terminal {
                       about           - app info/version
                       echo <text>     - print text (supports > file for redirect)
                       open <app name> - launch app by visible name (e.g. open Minecraft)
+                      open <file>     - open file in associated app (e.g. open file.txt)
                       history         - show input history
                       clear           - clear terminal history (internal)
                       settings|console- open settings screen
                       clearwork       - clear work folder (SAF) configured in settings (recursive)
                       ls|dir          - list files in current directory
-                      cd <dir>        - change directory (supports .., simple names no paths)
+                      cd <dir>        - change directory (supports .., relative paths)
                       pwd             - print working directory path
-                      cp <src> <dst>  - copy file (simple names)
-                      mv <src> <dst>  - move file (simple names)
-                      rm [-r] <file>  - remove file or dir (recursive with -r)
-                      mkdir <name>    - create directory
-                      touch <name>    - create empty file
-                      cat <file>      - display file contents
-                      pm list         - list installed packages
-                      pm install <apk>- install APK from work dir
+                      cp <src> <dst>  - copy file/dir (supports relative paths)
+                      mv <src> <dst>  - move file/dir (supports relative paths)
+                      rm [-r] <file>  - remove file or dir (recursive with -r, supports paths)
+                      mkdir <name>    - create directory (supports paths)
+                      touch <name>    - create empty file (supports paths)
+                      cat <file>      - display file contents (supports paths)
+                      ln <src> <link> - create pseudo-link (copy) of file (supports paths)
+                      wc <file>       - word count: lines, words, chars (supports paths)
+                      head <file> [n] - show first n lines (default 10, supports paths)
+                      tail <file> [n] - show last n lines (default 10, supports paths)
+                      du <file|dir>   - show size in bytes (recursive for dirs, supports paths)
+                      pm list [user|system] - list installed packages (all or filtered)
+                      pm install <apk>- install APK from work dir (supports paths)
                       pm uninstall <pkg> - uninstall package
                       pm launch <pkg> - launch package
                       date            - show current date/time
                       whoami          - show user info
+                      uname           - show system info
+                      uptime          - show system uptime
+                      which <cmd>     - check if command exists
                       vpns            - open VPN settings
                       btss            - open battery settings
                       wifi            - open Wi-Fi settings
@@ -80,6 +93,9 @@ class Terminal {
                       nfc             - open NFC settings
                       cam             - open camera
                       clk             - open date/time settings
+                      notif           - open notification settings
+                      acc             - open account settings
+                      dev             - open developer settings
                     """.trimIndent()
                 }
 
@@ -92,50 +108,56 @@ class Terminal {
                         val index = args.indexOf(">")
                         if (index == -1 || index == args.size - 1) return "Error: invalid redirect"
                         val text = args.subList(0, index).joinToString(" ")
-                        val fileName = args[index + 1]
-                        val current = getCurrentDir(ctx) ?: return "Error: work folder not set"
-                        val file = current.findFile(fileName) ?: current.createFile("text/plain", fileName)
+                        val filePath = args[index + 1]
+                        val (parent, fileName) = resolvePath(ctx, filePath, createDirs = true) ?: return "Error: invalid path"
+                        val file = parent.findFile(fileName) ?: parent.createFile("text/plain", fileName)
                             ?: return "Error: cannot create file"
                         val out = ctx.contentResolver.openOutputStream(file.uri, "wt")
                             ?: return "Error: cannot open file for writing"
                         out.use { it.write(text.toByteArray()) }
-                        "Info: wrote to $fileName"
+                        "Info: wrote to $filePath"
                     } else {
                         args.joinToString(" ")
                     }
                 }
 
                 "open" -> {
-                    if (args.isEmpty()) return "Error: specify app name to open, e.g. open Minecraft"
-                    val appName = args.joinToString(" ") // support spaces in name
-                    val pkg = findPackageByName(ctx, appName)
-                    if (pkg == null) {
-                        "Error: app '$appName' not found"
-                    } else {
-                        // Попытка получить launch intent
+                    if (args.isEmpty()) return "Error: specify app name or file path, e.g. open Minecraft or open file.txt"
+                    val target = args.joinToString(" ")
+                    val pkg = findPackageByName(ctx, target)
+                    if (pkg != null) {
+                        // Это приложение
                         val pm = ctx.packageManager
                         val launchIntent = pm.getLaunchIntentForPackage(pkg)
                         if (launchIntent != null) {
-                            // Если контекст не Activity, нужен флаг NEW_TASK
                             if (ctx !is Activity) launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             ctx.startActivity(launchIntent)
-                            "Info: launching '$appName' (package: $pkg)"
+                            "Info: launching app '$target' (package: $pkg)"
                         } else {
-                            // Фоллбек: попробуем сформировать intent по пакету
                             val fallback = Intent(Intent.ACTION_MAIN).apply {
                                 addCategory(Intent.CATEGORY_LAUNCHER)
                                 `package` = pkg
                                 if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
-                            // Если ничего не найдено, предупредим
                             val resolveList = pm.queryIntentActivities(fallback, 0)
                             if (resolveList.isNotEmpty()) {
                                 ctx.startActivity(fallback)
-                                "Info: launching '$appName' (package: $pkg)"
+                                "Info: launching app '$target' (package: $pkg)"
                             } else {
-                                "Error: cannot launch app '$appName' (no launcher activity)"
+                                "Error: cannot launch app '$target' (no launcher activity)"
                             }
                         }
+                    } else {
+                        // Пробуем как файл
+                        val (parent, fileName) = resolvePath(ctx, target) ?: return "Error: invalid path"
+                        val file = parent.findFile(fileName) ?: return "Error: no such file '$target'"
+                        val intent = Intent(Intent.ACTION_VIEW).apply {
+                            setDataAndType(file.uri, file.type ?: "*/*")
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        ctx.startActivity(intent)
+                        "Info: opening file '$target'"
                     }
                 }
 
@@ -145,16 +167,12 @@ class Terminal {
                 }
 
                 "clear" -> {
-                    // очищаем внутреннюю историю
                     history.clear()
-                    // Возвращаем информационное сообщение. MainActivity может реагировать и физически очищать экран.
                     "Info: Screen cleared."
                 }
 
                 "settings", "console" -> {
-                    // открываем SettingsActivity; возвращаем null, чтобы MainActivity ничего не дописывал
                     val intent = Intent(ctx, SettingsActivity::class.java)
-                    // если передан не-Activity context, добавить NEW_TASK
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     ctx.startActivity(intent)
@@ -190,26 +208,10 @@ class Terminal {
                 }
 
                 "cd" -> {
-                    if (args.isEmpty()) return "Error: specify directory (simple name or ..)"
-                    val dirName = args.joinToString(" ") // support spaces? but split, so no, assume no spaces
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    if (dirName == "..") {
-                        val parent = current.parentFile
-                        if (parent != null) {
-                            setCurrentDir(ctx, parent)
-                            "Info: changed to parent directory"
-                        } else {
-                            "Info: already at root"
-                        }
-                    } else {
-                        val subDir = current.findFile(dirName)
-                        if (subDir != null && subDir.isDirectory) {
-                            setCurrentDir(ctx, subDir)
-                            "Info: changed to $dirName"
-                        } else {
-                            "Error: no such directory '$dirName'"
-                        }
-                    }
+                    val path = if (args.isEmpty()) "." else args.joinToString(" ")
+                    val (newDir, _) = resolvePath(ctx, path, isDir = true) ?: return "Error: invalid path"
+                    setCurrentDir(ctx, newDir)
+                    "Info: changed to ${buildPath(newDir)}"
                 }
 
                 "pwd" -> {
@@ -219,77 +221,143 @@ class Terminal {
 
                 "cp" -> {
                     if (args.size < 2) return "Error: cp <source> <dest>"
-                    val sourceName = args[0]
-                    val destName = args[1]
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val src = current.findFile(sourceName) ?: return "Error: no source '$sourceName'"
-                    val dest = current.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
+                    val srcPath = args[0]
+                    val destPath = args[1]
+                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
+                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
+                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
+                    val dest = destParent.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
                     copyFile(ctx, src.uri, dest.uri)
-                    "Info: copied $sourceName to $destName"
+                    "Info: copied $srcPath to $destPath"
                 }
 
                 "mv" -> {
                     if (args.size < 2) return "Error: mv <source> <dest>"
-                    val sourceName = args[0]
-                    val destName = args[1]
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val src = current.findFile(sourceName) ?: return "Error: no source '$sourceName'"
-                    val dest = current.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
+                    val srcPath = args[0]
+                    val destPath = args[1]
+                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
+                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
+                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
+                    val dest = destParent.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
                     copyFile(ctx, src.uri, dest.uri)
                     src.delete()
-                    "Info: moved $sourceName to $destName"
+                    "Info: moved $srcPath to $destPath"
                 }
 
                 "rm" -> {
-                    if (args.isEmpty()) return "Error: rm [-r] <name>"
+                    if (args.isEmpty()) return "Error: rm [-r] <path>"
                     val hasR = args.contains("-r")
-                    val targetName = args.firstOrNull { it != "-r" } ?: return "Error: specify name"
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val target = current.findFile(targetName) ?: return "Error: no such file '$targetName'"
+                    val targetPath = args.firstOrNull { it != "-r" } ?: return "Error: specify path"
+                    val (parent, targetName) = resolvePath(ctx, targetPath) ?: return "Error: invalid path"
+                    val target = parent.findFile(targetName) ?: return "Error: no such file '$targetPath'"
                     if (target.isDirectory && !hasR) {
                         if (target.listFiles().isNotEmpty()) return "Error: directory not empty, use -r"
                     }
                     recursiveDelete(target)
-                    "Info: deleted $targetName"
+                    "Info: deleted $targetPath"
                 }
 
                 "mkdir" -> {
-                    if (args.isEmpty()) return "Error: mkdir <name>"
-                    val dirName = args[0]
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val newDir = current.createDirectory(dirName) ?: return "Error: cannot create directory"
-                    "Info: created directory $dirName"
+                    if (args.isEmpty()) return "Error: mkdir <path>"
+                    val dirPath = args[0]
+                    val (parent, dirName) = resolvePath(ctx, dirPath, createDirs = true) ?: return "Error: invalid path"
+                    val newDir = parent.createDirectory(dirName) ?: return "Error: cannot create directory"
+                    "Info: created directory $dirPath"
                 }
 
                 "touch" -> {
-                    if (args.isEmpty()) return "Error: touch <name>"
-                    val fileName = args[0]
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val newFile = current.createFile("text/plain", fileName) ?: return "Error: cannot create file"
-                    "Info: created file $fileName"
+                    if (args.isEmpty()) return "Error: touch <path>"
+                    val filePath = args[0]
+                    val (parent, fileName) = resolvePath(ctx, filePath, createDirs = true) ?: return "Error: invalid path"
+                    val newFile = parent.createFile("text/plain", fileName) ?: return "Error: cannot create file"
+                    "Info: created file $filePath"
                 }
 
                 "cat" -> {
-                    if (args.isEmpty()) return "Error: cat <file>"
-                    val fileName = args[0]
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    val file = current.findFile(fileName) ?: return "Error: no such file '$fileName'"
+                    if (args.isEmpty()) return "Error: cat <path>"
+                    val filePath = args[0]
+                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
                     val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
                     input.bufferedReader().use { it.readText() }
                 }
 
+                "ln" -> {
+                    if (args.size < 2) return "Error: ln <source> <link>"
+                    val srcPath = args[0]
+                    val linkPath = args[1]
+                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
+                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
+                    val (linkParent, linkName) = resolvePath(ctx, linkPath, createDirs = true) ?: return "Error: invalid link path"
+                    val link = linkParent.createFile(src.type ?: "*/*", linkName) ?: return "Error: cannot create link"
+                    copyFile(ctx, src.uri, link.uri)
+                    "Info: created link $linkPath to $srcPath"
+                }
+
+                "wc" -> {
+                    if (args.isEmpty()) return "Error: wc <path>"
+                    val filePath = args[0]
+                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
+                    val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
+                    val text = input.bufferedReader().use { it.readText() }
+                    val lines = text.lines().size
+                    val words = text.split("\\s+".toRegex()).filter { it.isNotEmpty() }.size
+                    val chars = text.length
+                    "$lines $words $chars $filePath"
+                }
+
+                "head" -> {
+                    if (args.isEmpty()) return "Error: head <path> [n]"
+                    val filePath = args[0]
+                    val n = if (args.size > 1) args[1].toIntOrNull() ?: 10 else 10
+                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
+                    val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
+                    input.bufferedReader().use { reader ->
+                        (1..n).mapNotNull { reader.readLine() }.joinToString("\n")
+                    }
+                }
+
+                "tail" -> {
+                    if (args.isEmpty()) return "Error: tail <path> [n]"
+                    val filePath = args[0]
+                    val n = if (args.size > 1) args[1].toIntOrNull() ?: 10 else 10
+                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
+                    val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
+                    val lines = input.bufferedReader().use { it.readLines() }
+                    lines.takeLast(n).joinToString("\n")
+                }
+
+                "du" -> {
+                    if (args.isEmpty()) return "Error: du <path>"
+                    val path = args[0]
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file '$path'"
+                    val size = calculateSize(target)
+                    "$size $path"
+                }
+
                 "pm" -> {
-                    if (args.isEmpty()) return "Error: pm list|install <apk>|uninstall <pkg>|launch <pkg>"
+                    if (args.isEmpty()) return "Error: pm list [user|system]|install <apk>|uninstall <pkg>|launch <pkg>"
                     when (args[0].lowercase()) {
                         "list" -> {
+                            val filter = if (args.size > 1) args[1].lowercase() else "all"
                             val pm = ctx.packageManager
-                            pm.getInstalledApplications(0).joinToString("\n") { it.packageName }
+                            val packages = pm.getInstalledPackages(0)
+                            val filtered = when (filter) {
+                                "user" -> packages.filter { pm.getApplicationInfo(it.packageName, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM == 0 }
+                                "system" -> packages.filter { pm.getApplicationInfo(it.packageName, 0).flags and android.content.pm.ApplicationInfo.FLAG_SYSTEM != 0 }
+                                else -> packages
+                            }
+                            filtered.joinToString("\n") { it.packageName }
                         }
                         "install" -> {
                             if (args.size < 2) return "Error: pm install <apk>"
-                            val apkName = args[1]
-                            val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                            val apkFile = current.findFile(apkName) ?: return "Error: no such APK '$apkName'"
+                            val apkPath = args[1]
+                            val (parent, apkName) = resolvePath(ctx, apkPath) ?: return "Error: invalid path"
+                            val apkFile = parent.findFile(apkName) ?: return "Error: no such APK '$apkPath'"
                             if (!apkName.endsWith(".apk")) return "Error: not an APK file"
                             val intent = Intent(Intent.ACTION_VIEW).apply {
                                 setDataAndType(apkFile.uri, "application/vnd.android.package-archive")
@@ -297,7 +365,7 @@ class Terminal {
                                 if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                             }
                             ctx.startActivity(intent)
-                            "Info: installing $apkName"
+                            "Info: installing $apkPath"
                         }
                         "uninstall" -> {
                             if (args.size < 2) return "Error: pm uninstall <pkg>"
@@ -331,6 +399,34 @@ class Terminal {
 
                 "whoami" -> {
                     Process.myUserHandle().toString()
+                }
+
+                "uname" -> {
+                    "Android ${Build.VERSION.RELEASE} ${Build.MODEL} ${Build.MANUFACTURER}"
+                }
+
+                "uptime" -> {
+                    val uptimeMillis = SystemClock.elapsedRealtime()
+                    val days = (uptimeMillis / (1000 * 60 * 60 * 24)).toInt()
+                    val hours = ((uptimeMillis / (1000 * 60 * 60)) % 24).toInt()
+                    val minutes = ((uptimeMillis / (1000 * 60)) % 60).toInt()
+                    val seconds = ((uptimeMillis / 1000) % 60).toInt()
+                    "$days days, $hours:$minutes:$seconds"
+                }
+
+                "which" -> {
+                    if (args.isEmpty()) return "Error: which <command>"
+                    val cmd = args[0].lowercase()
+                    val knownCommands = listOf("help", "about", "echo", "open", "history", "clear", "settings", "console", "clearwork",
+                        "ls", "dir", "cd", "pwd", "cp", "mv", "rm", "mkdir", "touch", "cat", "ln", "wc", "head", "tail", "du",
+                        "pm", "date", "whoami", "uname", "uptime", "which",
+                        "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
+                        "notif", "acc", "dev")
+                    if (knownCommands.contains(cmd)) {
+                        "$cmd: built-in command"
+                    } else {
+                        "$cmd: not found"
+                    }
                 }
 
                 "vpns" -> {
@@ -438,12 +534,32 @@ class Terminal {
                     "Info: opening date/time settings"
                 }
 
+                "notif" -> {
+                    val intent = Intent(Settings.ACTION_NOTIFICATION_SETTINGS)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening notification settings"
+                }
+
+                "acc" -> {
+                    val intent = Intent(Settings.ACTION_SYNC_SETTINGS)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening account settings"
+                }
+
+                "dev" -> {
+                    val intent = Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening developer settings"
+                }
+
                 else -> {
                     "Unknown command: $command"
                 }
             }
         } catch (t: Throwable) {
-            // аккуратно возвращаем ошибку
             "Error: ${t.message ?: "execution failed"}"
         }
     }
@@ -501,6 +617,55 @@ class Terminal {
         }
     }
 
+    private fun calculateSize(doc: DocumentFile): Long {
+        if (doc.isDirectory) {
+            return doc.listFiles().sumOf { calculateSize(it) }
+        }
+        return doc.length()
+    }
+
+    /**
+     * Разрешает относительный путь в SAF.
+     * Возвращает пару (родительская папка, имя файла/папки).
+     * Если createDirs = true, создаёт промежуточные папки.
+     * Если isDir = true, ожидает, что последний компонент - папка.
+     */
+    private fun resolvePath(ctx: Context, path: String, createDirs: Boolean = false, isDir: Boolean = false): Pair<DocumentFile, String>? {
+        if (path.isEmpty()) return null
+        val current = getCurrentDir(ctx) ?: return null
+        val root = getRootDir(ctx) ?: return null
+
+        val components = path.split("/").filter { it.isNotEmpty() }
+        var curDir = current
+
+        for (i in 0 until components.size - if (isDir) 0 else 1) {
+            val comp = components[i]
+            when (comp) {
+                "." -> {} // текущая
+                ".." -> {
+                    val parent = curDir.parentFile
+                    if (parent != null && !parent.uri.equals(root.uri)) {
+                        curDir = parent
+                    }
+                }
+                else -> {
+                    val subDir = curDir.findFile(comp)
+                    if (subDir != null && subDir.isDirectory) {
+                        curDir = subDir
+                    } else if (createDirs) {
+                        val newSubDir = curDir.createDirectory(comp) ?: return null
+                        curDir = newSubDir
+                    } else {
+                        return null
+                    }
+                }
+            }
+        }
+
+        val last = if (components.isEmpty()) "" else components.last()
+        return curDir to last
+    }
+
     /**
      * Ищет packageName по видимому имени приложения (label) или по packageName частично.
      * Сначала пробует точное совпадение label (ignoreCase), затем contains по label, затем по packageName.
@@ -509,7 +674,7 @@ class Terminal {
     private fun findPackageByName(ctx: Context, appName: String): String? {
         val pm = ctx.packageManager
         val queryIntent = Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-        val resolveInfos = pm.queryIntentActivities(queryIntent, 0)
+        val resolveInfos = pm.queryIntentActivities(queryIntent, PackageManager.MATCH_ALL)
 
         // 1) exact match by label
         for (ri in resolveInfos) {
