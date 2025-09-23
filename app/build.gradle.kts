@@ -24,8 +24,13 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            signingConfig = null // Убрана подпись для неподписанного APK
+            // лучше удалить `signingConfig = null` — подпись задаётся отдельно при релизе
         }
+    }
+
+    // Включаем viewBinding — удобно и безопасно для Kotlin UI-кода
+    buildFeatures {
+        viewBinding = true
     }
 
     compileOptions {
@@ -37,6 +42,21 @@ android {
         jvmTarget = "1.8"
     }
 
+    // На случай конфликтов при пакетировании (иногда возникает с bcprov)
+    /*
+    packagingOptions {
+        resources {
+            excludes += listOf(
+                "META-INF/DEPENDENCIES",
+                "META-INF/LICENSE",
+                "META-INF/LICENSE.txt",
+                "META-INF/NOTICE",
+                "META-INF/NOTICE.txt"
+            )
+        }
+    }
+    */
+
     dependenciesInfo {
         includeInApk = false
         includeInBundle = false
@@ -44,10 +64,14 @@ android {
 }
 
 dependencies {
+    // Core ktx — рекомендую добавить
+    implementation("androidx.core:core-ktx:1.11.0") // или alias(libs.core.ktx) если есть в catalog
+
     implementation(libs.appcompat)
     implementation(libs.material)
     implementation(libs.bcprov.jdk15on)
 
+    // На minSdk >= 21 библиотека multidex обычно не нужна. Оставлять — по желанию.
     implementation(libs.multidex)
     implementation(libs.recyclerview)
 
