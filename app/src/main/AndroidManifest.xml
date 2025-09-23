@@ -2,10 +2,14 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.syndes.terminal">
 
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <!-- Блок queries вместо QUERY_ALL_PACKAGES -->
+    <queries>
+        <!-- Позволяет находить все приложения с LAUNCHER-активити -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -18,18 +22,16 @@
             android:exported="true"
             android:theme="@style/AppTheme.Transparent">
             <intent-filter>
-                <action android:name="android.intent.action.MAIN"/>
-                <category android:name="android.intent.category.LAUNCHER"/>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
 
-        <!-- SettingsActivity доступна только внутри приложения -->
+        <!-- SettingsActivity тоже нужно зарегистрировать -->
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
-            android:theme="@style/AppTheme.Transparent"
-            android:label="Settings" />
-
+            android:theme="@style/AppTheme.Transparent"/>
     </application>
 
 </manifest>
