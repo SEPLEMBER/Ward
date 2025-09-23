@@ -18,7 +18,7 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = true // Включил R8 для оптимизации
+            isMinifyEnabled = true // Включен R8 для оптимизации
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -46,10 +46,10 @@ android {
 }
 
 dependencies {
-    // Используем версию core-ktx из version catalog
     implementation(libs.core.ktx)
-
     implementation(libs.appcompat)
+    implementation(libs.documentfile)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
