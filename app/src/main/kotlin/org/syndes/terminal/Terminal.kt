@@ -1,7 +1,6 @@
 package org.syndes.terminal
 
 import android.app.Activity
-import android.app.ActivityManager
 import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
@@ -704,7 +703,9 @@ class Terminal {
                 }
 
                 "notif" -> {
-                    val intent = Intent("android.settings.NOTIFICATION_SETTINGS")
+                    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).apply {
+                        putExtra(Settings.EXTRA_APP_PACKAGE, ctx.packageName)
+                    }
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
                     "Info: opening notification settings"
