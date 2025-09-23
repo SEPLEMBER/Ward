@@ -18,6 +18,12 @@
             </intent-filter>
         </activity>
 
+        <!-- SettingsActivity доступна только внутри приложения -->
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.Transparent"
+            android:label="Settings" />
     </application>
 
 </manifest>
