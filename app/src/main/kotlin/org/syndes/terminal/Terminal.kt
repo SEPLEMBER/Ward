@@ -2,6 +2,7 @@ package org.syndes.terminal
 
 import android.app.Activity
 import android.app.ActivityManager
+import android.app.SearchManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -10,6 +11,7 @@ import android.os.Build
 import android.os.Process
 import android.os.SystemClock
 import android.provider.AlarmClock
+import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
 import androidx.documentfile.provider.DocumentFile
@@ -38,8 +40,24 @@ class Terminal {
 
         // разбиваем на токены
         val tokens = command.split("\\s+".toRegex())
-        val name = tokens[0].lowercase()
-        val args = tokens.drop(1)
+        var name = tokens[0].lowercase()
+        var args = tokens.drop(1)
+
+        // Загружаем алиасы
+        val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
+        val aliasesStr = prefs.getString("aliases", "") ?: ""
+        val aliases = aliasesStr.split(";").filter { it.isNotBlank() }.associate {
+            val parts = it.split("=", limit = 2)
+            parts[0].trim().lowercase() to parts[1].trim()
+        }
+
+        // Подставляем алиас, если есть
+        if (name in aliases) {
+            val aliasCmd = aliases[name]!!
+            val aliasTokens = aliasCmd.split("\\s+".toRegex())
+            name = aliasTokens[0].lowercase()
+            args = aliasTokens.drop(1) + args
+        }
 
         return try {
             when (name) {
@@ -69,6 +87,8 @@ class Terminal {
                       head <file> [n] - show first n lines (default 10, supports paths)
                       tail <file> [n] - show last n lines (default 10, supports paths)
                       du <file|dir>   - show size in bytes (recursive for dirs, supports paths)
+                      stat <path>     - show file/dir stats (size, type, modified)
+                      find <name>     - find files by name in current dir
                       pm list [user|system] - list installed packages (all or filtered)
                       pm install <apk>- install APK from work dir (supports paths)
                       pm uninstall <pkg> - uninstall package
@@ -78,6 +98,17 @@ class Terminal {
                       uname           - show system info
                       uptime          - show system uptime
                       which <cmd>     - check if command exists
+                      alias <name>=<command> - set alias
+                      unalias <name>  - remove alias
+                      env             - show environment vars
+                      sms [number] [text] - open SMS app (with number and text)
+                      call <number>   - dial number
+                      email [address] [subject] [body] - open email app (with address, subject, body)
+                      browser [url]   - open browser (with URL)
+                      search <query>  - web search query
+                      contacts        - open contacts app
+                      alarm           - open alarm app
+                      calc            - open calculator
                       vpns            - open VPN settings
                       btss            - open battery settings
                       wifi            - open Wi-Fi settings
@@ -339,6 +370,143 @@ class Terminal {
                     "$size $path"
                 }
 
+                "stat" -> {
+                    if (args.isEmpty()) return "Error: stat <path>"
+                    val path = args[0]
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file '$path'"
+                    val size = target.length()
+                    val type = target.type ?: "unknown"
+                    val modified = SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(target.lastModified()))
+                    "Size: $size bytes\nType: $type\nModified: $modified"
+                }
+
+                "find" -> {
+                    if (args.isEmpty()) return "Error: find <name>"
+                    val searchName = args.joinToString(" ").lowercase()
+                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
+                    val results = current.listFiles().filter { it.name?.lowercase()?.contains(searchName) == true }.joinToString("\n") { it.name ?: "?" }
+                    if (results.isEmpty()) "No matches found." else results
+                }
+
+                "alias" -> {
+                    if (args.isEmpty()) return "Error: alias <name>=<command>"
+                    val aliasStr = args.joinToString(" ")
+                    val parts = aliasStr.split("=", limit = 2)
+                    if (parts.size < 2) return "Error: invalid format <name>=<command>"
+                    val aliasName = parts[0].trim().lowercase()
+                    val aliasCmd = parts[1].trim()
+                    val currentAliases = prefs.getString("aliases", "") ?: ""
+                    val newAliasesList = currentAliases.split(";").filter { it.isNotBlank() }.toMutableList()
+                    newAliasesList.removeAll { it.split("=")[0].trim().lowercase() == aliasName }
+                    newAliasesList.add("$aliasName=$aliasCmd")
+                    val newAliases = newAliasesList.joinToString(";")
+                    prefs.edit().putString("aliases", newAliases).apply()
+                    "Info: alias set: $aliasName=$aliasCmd"
+                }
+
+                "unalias" -> {
+                    if (args.isEmpty()) return "Error: unalias <name>"
+                    val aliasName = args.joinToString(" ").trim().lowercase()
+                    val currentAliases = prefs.getString("aliases", "") ?: ""
+                    val newAliasesList = currentAliases.split(";").filter { it.isNotBlank() }.toMutableList()
+                    val removed = newAliasesList.removeAll { it.split("=")[0].trim().lowercase() == aliasName }
+                    val newAliases = newAliasesList.joinToString(";")
+                    prefs.edit().putString("aliases", newAliases).apply()
+                    if (removed) "Info: alias $aliasName removed" else "Info: alias $aliasName not found"
+                }
+
+                "env" -> {
+                    prefs.all.entries.joinToString("\n") { "${it.key}=${it.value}" }
+                }
+
+                "sms" -> {
+                    val intent = if (args.isEmpty()) {
+                        Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) }
+                    } else {
+                        val number = args[0]
+                        val text = args.drop(1).joinToString(" ")
+                        Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:$number")).apply {
+                            putExtra("sms_body", text)
+                        }
+                    }
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening SMS app"
+                }
+
+                "call" -> {
+                    if (args.isEmpty()) return "Error: call <number>"
+                    val number = args[0]
+                    val intent = Intent(Intent.ACTION_DIAL, Uri.parse("tel:$number"))
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: dialing $number"
+                }
+
+                "email" -> {
+                    val intent = if (args.isEmpty()) {
+                        Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_EMAIL) }
+                    } else {
+                        val address = args[0]
+                        val subject = if (args.size > 1) args[1] else ""
+                        val body = if (args.size > 2) args.drop(2).joinToString(" ") else ""
+                        Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$address")).apply {
+                            putExtra(Intent.EXTRA_SUBJECT, subject)
+                            putExtra(Intent.EXTRA_TEXT, body)
+                        }
+                    }
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening email app"
+                }
+
+                "browser" -> {
+                    val url = if (args.isEmpty()) "https://" else args.joinToString(" ")
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening browser"
+                }
+
+                "search" -> {
+                    if (args.isEmpty()) return "Error: search <query>"
+                    val query = args.joinToString(" ")
+                    val intent = Intent(Intent.ACTION_WEB_SEARCH).apply {
+                        putExtra(SearchManager.QUERY, query)
+                    }
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: searching '$query'"
+                }
+
+                "contacts" -> {
+                    val intent = Intent(Intent.ACTION_VIEW, ContactsContract.Contacts.CONTENT_URI)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening contacts"
+                }
+
+                "alarm" -> {
+                    val intent = Intent(AlarmClock.ACTION_SET_ALARM)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening alarm app"
+                }
+
+                "calc" -> {
+                    val pkg = findPackageByName(ctx, "calculator")
+                    if (pkg == null) return "Error: calculator app not found"
+                    val launchIntent = ctx.packageManager.getLaunchIntentForPackage(pkg)
+                    if (launchIntent != null) {
+                        if (ctx !is Activity) launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(launchIntent)
+                        "Info: opening calculator"
+                    } else {
+                        "Error: cannot launch calculator"
+                    }
+                }
+
                 "pm" -> {
                     if (args.isEmpty()) return "Error: pm list [user|system]|install <apk>|uninstall <pkg>|launch <pkg>"
                     when (args[0].lowercase()) {
@@ -418,8 +586,9 @@ class Terminal {
                     if (args.isEmpty()) return "Error: which <command>"
                     val cmd = args[0].lowercase()
                     val knownCommands = listOf("help", "about", "echo", "open", "history", "clear", "settings", "console", "clearwork",
-                        "ls", "dir", "cd", "pwd", "cp", "mv", "rm", "mkdir", "touch", "cat", "ln", "wc", "head", "tail", "du",
-                        "pm", "date", "whoami", "uname", "uptime", "which",
+                        "ls", "dir", "cd", "pwd", "cp", "mv", "rm", "mkdir", "touch", "cat", "ln", "wc", "head", "tail", "du", "stat", "find",
+                        "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
+                        "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
                         "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
                         "notif", "acc", "dev")
                     if (knownCommands.contains(cmd)) {
@@ -535,7 +704,7 @@ class Terminal {
                 }
 
                 "notif" -> {
-                    val intent = Intent(Settings.ACTION_NOTIFICATION_SETTINGS)
+                    val intent = Intent("android.settings.NOTIFICATION_SETTINGS")
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
                     "Info: opening notification settings"
