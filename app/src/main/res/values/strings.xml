@@ -1,4 +1,6 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">HelloTest</string>
+    <string name="app_name">Syndes Terminal</string>
+    <string name="hint_command">Enter command</string>
+    <string name="btn_run">Run</string>
+    <string name="welcome_msg">Welcome to Syndes Terminal!\nType 'help' to see commands.\n</string>
 </resources>
