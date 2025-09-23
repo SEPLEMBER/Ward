@@ -2,13 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.syndes.terminal">
 
-    <!-- Разрешения для работы с хранилищем (SAF) -->
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
-    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" tools:targetApi="r" />
-
-    <!-- Разрешение для получения списка всех приложений (Android 11+) -->
-    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
 
     <application
         android:allowBackup="true"
@@ -32,71 +29,6 @@
             android:exported="false"
             android:theme="@style/AppTheme.Transparent"
             android:label="Settings" />
-
-        <!-- Объявление намерений для работы с приложениями, файлами и системными функциями (необходимо для Android 11+) -->
-        <queries>
-            <!-- Для запуска приложений -->
-            <intent>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent>
-            <!-- Для удаления приложений -->
-            <intent>
-                <action android:name="android.intent.action.DELETE" />
-                <data android:scheme="package" />
-            </intent>
-            <!-- Для просмотра файлов -->
-            <intent>
-                <action android:name="android.intent.action.VIEW" />
-                <data android:scheme="file" />
-                <data android:mimeType="*/*" />
-            </intent>
-            <intent>
-                <action android:name="android.intent.action.VIEW" />
-                <data android:scheme="content" />
-                <data android:mimeType="*/*" />
-            </intent>
-            <!-- Для SMS -->
-            <intent>
-                <action android:name="android.intent.action.SENDTO" />
-                <data android:scheme="smsto" />
-            </intent>
-            <!-- Для email -->
-            <intent>
-                <action android:name="android.intent.action.SENDTO" />
-                <data android:scheme="mailto" />
-            </intent>
-            <!-- Для веб-поиска -->
-            <intent>
-                <action android:name="android.intent.action.WEB_SEARCH" />
-            </intent>
-            <!-- Для звонков -->
-            <intent>
-                <action android:name="android.intent.action.DIAL" />
-                <data android:scheme="tel" />
-            </intent>
-            <!-- Для контактов -->
-            <intent>
-                <action android:name="android.intent.action.VIEW" />
-                <data android:scheme="content" android:host="com.android.contacts" />
-            </intent>
-            <!-- Для будильника -->
-            <intent>
-                <action android:name="android.intent.action.SET_ALARM" />
-            </intent>
-            <!-- Для установки APK -->
-            <intent>
-                <action android:name="android.intent.action.VIEW" />
-                <data android:mimeType="application/vnd.android.package-archive" />
-            </intent>
-            <!-- Для системных настроек (пример для Wi-Fi, Bluetooth и т.д.) -->
-            <intent>
-                <action android:name="android.settings.WIFI_SETTINGS" />
-            </intent>
-            <intent>
-                <action android:name="android.settings.BLUETOOTH_SETTINGS" />
-            </intent>
-       </queries>
 
     </application>
 
