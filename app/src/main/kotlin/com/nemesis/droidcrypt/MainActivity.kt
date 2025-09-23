@@ -5,6 +5,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import org.syndes.terminal.Terminal
 
 class MainActivity : AppCompatActivity() {
 
