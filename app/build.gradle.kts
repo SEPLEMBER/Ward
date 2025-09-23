@@ -46,7 +46,9 @@ android {
 }
 
 dependencies {
-    implementation("androidx.core:core-ktx:1.11.0")
+    // Используем версию core-ktx из version catalog
+    implementation(libs.core.ktx)
+
     implementation(libs.appcompat)
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
