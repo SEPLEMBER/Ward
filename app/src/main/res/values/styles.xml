@@ -1,7 +1,6 @@
 <resources>
-
     <!-- Базовая тема -->
-    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.NoActionBar">
         <item name="android:colorBackground">@android:color/transparent</item>
     </style>
 
@@ -11,5 +10,4 @@
         <item name="android:windowBackground">@android:color/transparent</item>
         <item name="android:backgroundDimEnabled">false</item>
     </style>
-
 </resources>
