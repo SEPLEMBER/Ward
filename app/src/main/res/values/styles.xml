@@ -1,6 +1,15 @@
-<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.HelloTest" parent="Theme.AppCompat.Light.NoActionBar">
-        <!-- Минимальная тема без ActionBar -->
+
+    <!-- Базовая тема -->
+    <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:colorBackground">@android:color/transparent</item>
     </style>
+
+    <!-- Прозрачная тема -->
+    <style name="AppTheme.Transparent" parent="AppTheme">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
 </resources>
