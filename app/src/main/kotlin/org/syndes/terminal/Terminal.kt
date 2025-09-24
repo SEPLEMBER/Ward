@@ -459,7 +459,15 @@ class Terminal {
 "which" -> {
     if (args.isEmpty()) return "Usage: which <command>"
     val cmd = args[0].lowercase()
-    val known = listOf(/* same known list as before */)
+    val knownCommands = setOf(
+        "help","about","echo","open","launch","history","clear","settings","console","clearwork",
+        "ls","dir","cd","pwd","cp","mv","rm","mkdir","touch","cat","ln","wc","head","tail","du","stat","find",
+        "pm","date","whoami","uname","uptime","which","alias","unalias","env",
+        "sms","call","email","browser","search","contacts","alarm","calc",
+        "vpns","btss","wifi","bts","data","apm","snd","dsp","apps","stg","sec","loc","nfc","cam","clk",
+        "notif","acc","dev","syd","run","mem","device","cmp","diff","replace","rename","backup","snapshot",
+        "trash","cleartrash","sha256","md5","pminfo","type","pkgof","matrix"
+    )
     if (aliasesStr.split(";").any { it.split("=")[0].trim().lowercase() == cmd }) return "$cmd: alias"
     // check built-ins quickly
     if (listOf("help","about","echo","open","launch","history","clear","settings","ls","cd","pwd","cp","mv","rm","mkdir","touch","cat","wc","head","tail","du","stat","find","pm","date","uname","uptime","alias","unalias","env","sms","browser","search","mem","device","cmp","diff","replace","rename","backup","snapshot","trash","cleartrash","sha256","md5","pminfo","which","type","pkgof").contains(cmd)) {
