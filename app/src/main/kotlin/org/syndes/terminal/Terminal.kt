@@ -107,6 +107,13 @@ class Terminal {
                       rename <old> <new> <path> - rename filenames in dir (substring replace; use {} in new for counter)
                       encrypt <password> <path> - encrypt text files (recursively if dir)
                       decrypt <password> <path> - decrypt text files (recursively if dir)
+                      
+                      !!! WARNING (ENCRYPT): encrypting large folders is CPU-intensive.
+                      Please encrypt small folders or specific directories one-by-one.
+                      Iterations = 1000 (LOW). This provides only limited KDF hardness.
+                      Use a strong password — recommendation: minimum **8 different characters** (no enforcement).
+                       (Encryption here is a convenience/bonus — responsibility for secure passwords is on the user.)
+                      
                       wait <seconds>  - block commands for given seconds (persist until timeout)
                       pm list [user|system] - list installed packages (all or filtered)
                       pm install <apk>- install APK from work dir (supports paths)
@@ -337,8 +344,274 @@ class Terminal {
                     ctx.startActivity(intent)
                     null
                 }
+ 
+                    "tutorial" -> {
+                        val intent = Intent(ctx, SettingsActivity::class.java) // TODO: switch to TutorialActivity when available
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    }
 
-                "clearwork" -> {
+                      "exit" -> {
+                          // spawn thread to shutdown after a short delay to allow UI to render the message
+                          Thread {
+                              try { Thread.sleep(300) } catch (_: Throwable) {}
+                              // try graceful finish if we have an Activity
+                              (ctx as? Activity)?.runOnUiThread {
+                                  try { (ctx as Activity).finishAffinity() } catch (_: Throwable) {}
+                              }
+                              try { Thread.sleep(200) } catch (_: Throwable) {}
+                              try { android.os.Process.killProcess(android.os.Process.myPid()) } catch (_: Throwable) {}
+                          }.start()
+                          "Shutting down..."
+                      }
+  
+                        "backup", "snapshot" -> {
+                            if (args.isEmpty()) return "Usage: backup <path>"
+                            val path = args.joinToString(" ")
+                            val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                            val src = parent.findFile(name) ?: return "Error: source not found"
+                            val root = getRootDir(ctx) ?: return "Error: work folder not set."
+                            val backupRoot = root.findFile("SydBack") ?: root.createDirectory("SydBack") ?: return "Error: cannot create SydBack"
+                            val stamp = SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())
+                            val destDir = backupRoot.createDirectory("${name}_$stamp") ?: return "Error: cannot create snapshot dir"
+                            val copied = recursiveCopySAF(ctx, src, destDir)
+                            "Info: snapshot created: ${buildPath(destDir)} (files copied: $copied)"
+                        }
+  
+                          "batchren" -> {
+    if (args.size < 2) return "Usage: batchren <dir> <newPattern>"
+    val dirPath = args[0]
+    val pattern = args.drop(1).joinToString(" ")
+    val (parent, dirName) = resolvePath(ctx, dirPath) ?: return "Error: invalid path"
+    val dir = parent.findFile(dirName) ?: return "Error: no such directory '$dirPath'"
+    if (!dir.isDirectory) return "Error: target is not a directory"
+    val files = dir.listFiles().filter { !it.isDirectory }.sortedBy { it.lastModified() } // sorted by date
+    var counter = 1
+    var changed = 0
+    for (f in files) {
+        val ext = f.name?.substringAfterLast('.', "") ?: ""
+        val base = if (pattern.contains("{}")) pattern.replace("{}", counter.toString()) else pattern + counter.toString()
+        val newName = if (ext.isNotEmpty()) "$base.$ext" else base
+        if (f.name == newName) { counter++; continue }
+        // create new file and copy, then delete original
+        val newFile = dir.createFile(f.type ?: "application/octet-stream", newName)
+        if (newFile != null) {
+            copyFile(ctx, f.uri, newFile.uri)
+            f.delete()
+            changed++
+        }
+        counter++
+    }
+    "Info: renamed $changed file(s)"
+}
+
+"trash" -> {
+    if (args.isEmpty()) return "Usage: trash <path>"
+    val path = args.joinToString(" ")
+    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val target = parent.findFile(name) ?: return "Error: no such file '$path'"
+    val root = getRootDir(ctx) ?: return "Error: work folder not set."
+    val trash = root.findFile(".syndes_trash") ?: root.createDirectory(".syndes_trash") ?: return "Error: cannot create trash"
+    val dest = trash.createDirectory((name ?: "item") + "_" + SimpleDateFormat("yyyyMMdd_HHmmss").format(Date())) ?: trash
+    val moved = recursiveCopySAF(ctx, target, dest)
+    target.delete()
+    "Info: moved to trash ($moved file(s))"
+ }
+ 
+ "cleartrash" -> {
+    val root = getRootDir(ctx) ?: return "Error: work folder not set."
+    val trash = root.findFile(".syndes_trash") ?: return "Info: trash empty"
+    recursiveDelete(trash)
+    "Info: trash cleared"
+}
+
+"sha256", "md5" -> {
+    if (args.isEmpty()) return "Usage: sha256 <path>"
+    val path = args.joinToString(" ")
+    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val f = parent.findFile(name) ?: return "Error: file not found"
+    val algo = if (cmdName == "sha256") "SHA-256" else "MD5"
+    val hash = computeHashForSAF(ctx, f, algo) ?: return "Error: cannot read file"
+    "$algo: $hash"
+}
+
+"pminfo", "pminfo" -> {
+    if (args.isEmpty()) return "Usage: pminfo <package_or_appname>"
+    val target = args.joinToString(" ")
+    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: return "Error: app not found"
+    try {
+        val pm = ctx.packageManager
+        val pi = pm.getPackageInfo(pkg, PackageManager.GET_PERMISSIONS or PackageManager.GET_META_DATA)
+        val sb = StringBuilder()
+        sb.appendLine("Package: ${pi.packageName}")
+        sb.appendLine("Version: ${pi.versionName} (code ${if (android.os.Build.VERSION.SDK_INT >= 28) pi.longVersionCode else pi.versionCode})")
+        sb.appendLine("ApplicationInfo uid: ${pi.applicationInfo.uid}")
+        sb.appendLine("SourceDir: ${pi.applicationInfo.sourceDir}")
+        val perms = pi.requestedPermissions ?: emptyArray()
+        sb.appendLine("Requested permissions: ${perms.joinToString(", ")}")
+        sb.toString()
+    } catch (t: Throwable) {
+        "Error: cannot get package info: ${t.message}"
+    }
+}
+
+"which" -> {
+    if (args.isEmpty()) return "Usage: which <command>"
+    val cmd = args[0].lowercase()
+    val known = listOf(/* same known list as before */)
+    if (aliasesStr.split(";").any { it.split("=")[0].trim().lowercase() == cmd }) return "$cmd: alias"
+    // check built-ins quickly
+    if (listOf("help","about","echo","open","launch","history","clear","settings","ls","cd","pwd","cp","mv","rm","mkdir","touch","cat","wc","head","tail","du","stat","find","pm","date","uname","uptime","alias","unalias","env","sms","browser","search","mem","device","cmp","diff","replace","rename","backup","snapshot","trash","cleartrash","sha256","md5","pminfo","which","type","pkgof").contains(cmd)) {
+        "$cmd: built-in command"
+    } else {
+        "$cmd: not found"
+    }
+}
+
+"type" -> {
+    if (args.isEmpty()) return "Usage: type <path>"
+    val path = args.joinToString(" ")
+    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val f = parent.findFile(name) ?: return "Error: not found"
+    val sb = StringBuilder()
+    sb.appendLine("Name: ${f.name}")
+    sb.appendLine("Type: ${if (f.isDirectory) "directory" else "file"}")
+    sb.appendLine("MIME: ${f.type ?: "unknown"}")
+    sb.appendLine("Size: ${f.length()} bytes")
+    sb.appendLine("Modified: ${SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(f.lastModified()))}")
+    sb.toString()
+}
+
+// resolver: find package by visible name quickly
+"pkgof", "findpkg" -> {
+    if (args.isEmpty()) return "Usage: pkgof <app visible name or partial package>"
+    val name = args.joinToString(" ")
+    val pkg = findPackageByName(ctx, name) ?: return "Error: not found"
+    "Package: $pkg"
+}
+
+"batchedit" -> {
+    if (args.size < 3) return "Usage: batchedit <old> <new> <dir> [--dry]"
+    val old = args[0]; val new = args[1]; val dirPath = args[2]
+    val dry = args.contains("--dry")
+    val (p,dn) = resolvePath(ctx, dirPath) ?: return "Error: invalid path"
+    val dir = p.findFile(dn) ?: return "Error: dir not found"
+    if (!dir.isDirectory) return "Error: target not a directory"
+    val files = dir.listFiles().filter { !it.isDirectory }
+    var changed = 0
+    for (f in files) {
+        if (dry) {
+            // just count potential changes
+            val text = try { ctx.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readText() } ?: "" } catch (_: Throwable) { "" }
+            if (text.contains(old)) changed++
+        } else {
+            if (replaceInFile(ctx, f, old, new)) changed++
+        }
+    }
+    if (dry) "Dry-run: $changed file(s) would change" else "Info: changed $changed file(s)"
+}
+
+"ps", "top" -> {
+    val am = ctx.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return "Error: cannot access ActivityManager"
+    val procs = am.runningAppProcesses ?: return "Error: cannot get processes"
+    val sb = StringBuilder()
+    val list = procs.map { it }.sortedByDescending { it.importance } // crude sort
+    for (p in list.take(50)) {
+        sb.appendLine("PID:${p.pid} Name:${p.processName} pkg:${p.pkgList?.joinToString(",")}")
+    }
+    sb.toString()
+}
+
+"sysclipboard" -> {
+    if (args.isEmpty()) return "Usage: sysclipboard get|set <text>"
+    val sub = args[0].lowercase()
+    val cm = ctx.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager ?: return "Error: no clipboard"
+    when (sub) {
+        "get" -> {
+            val clip = cm.primaryClip
+            val text = clip?.getItemAt(0)?.coerceToText(ctx)?.toString() ?: ""
+            text
+        }
+        "set" -> {
+            val text = args.drop(1).joinToString(" ")
+            val clipData = android.content.ClipData.newPlainText("syndes", text)
+            cm.setPrimaryClip(clipData)
+            "Info: clipboard set"
+        }
+        else -> "Usage: clipboard get|set <text>"
+    }
+}
+
+"preview" -> {
+    if (args.isEmpty()) return "Usage: preview <path> [lines]"
+    val path = args[0]
+    val lines = if (args.size > 1) args[1].toIntOrNull() ?: 20 else 20
+    val (p,nm) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val f = p.findFile(nm) ?: return "Error: not found"
+    if (f.isDirectory) return "Error: cannot preview directory"
+    val mime = f.type ?: ""
+    try {
+        ctx.contentResolver.openInputStream(f.uri)?.use { ins ->
+            if (mime.startsWith("text") || nm.endsWith(".txt") || nm.endsWith(".md") || nm.endsWith(".log")) {
+                val txt = ins.bufferedReader().use { it.lineSequence().take(lines).joinToString("\n") }
+                txt
+            } else if (mime.startsWith("image")) {
+                // get image bounds
+                val opts = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                android.graphics.BitmapFactory.decodeStream(ins, null, opts)
+                "Image: ${opts.outWidth}x${opts.outHeight}, MIME: ${opts.outMimeType}"
+            } else {
+                "Preview not supported for MIME: $mime"
+            }
+        } ?: "Error: cannot open file"
+    } catch (t: Throwable) { "Error: preview failed: ${t.message}" }
+}
+
+"filekey", "apkkey" -> {
+    if (args.isEmpty()) return "Usage: filekey <apk_path>"
+    val path = args.joinToString(" ")
+    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val apk = parent.findFile(name) ?: return "Error: apk not found"
+    // copy to cache
+    val tmp = try {
+        val cf = java.io.File(ctx.cacheDir, "syndes_tmp_${System.currentTimeMillis()}.apk")
+        ctx.contentResolver.openInputStream(apk.uri)?.use { ins -> cf.outputStream().use { it.copyFrom(ins) } }
+        cf
+    } catch (t: Throwable) { null }
+    if (tmp == null) return "Error: cannot copy apk to cache"
+    try {
+        val pm = ctx.packageManager
+        val flags = if (android.os.Build.VERSION.SDK_INT >= 28) PackageManager.GET_SIGNING_CERTIFICATES else PackageManager.GET_SIGNATURES
+        val pi = pm.getPackageArchiveInfo(tmp.absolutePath, flags) ?: return "Error: cannot parse APK"
+        // reflect signing info
+        val sb = StringBuilder()
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            val signing = pi.signingInfo
+            val certs = signing?.apkContentsSigners ?: signing?.signingCertificateHistory ?: emptyArray()
+            for ((i,c) in certs.withIndex()) {
+                val hash = java.security.MessageDigest.getInstance("SHA-256").digest(c.toByteArray())
+                sb.appendLine("Cert#$i SHA-256: ${hash.toHexString()}")
+            }
+        } else {
+        val sigs = pi.signatures ?: emptyArray()
+            for ((i,s) in sigs.withIndex()) {
+                val hash = java.security.MessageDigest.getInstance("SHA-256").digest(s.toByteArray())
+                sb.appendLine("Signature#$i SHA-256: ${hash.toHexString()}")
+            }
+        }
+        sb.toString()
+    } catch (t: Throwable) {
+        "Error: cannot inspect apk: ${t.message}"
+    } finally {
+        try { tmp.delete() } catch (_: Throwable) {}
+    }
+}
+                          
+                          
+                          
+  
+                "delete all (y)" -> {
                     val root = getRootDir(ctx) ?: return "Error: work folder not set."
                     var deleted = 0
                     var failed = 0
@@ -1130,6 +1403,73 @@ class Terminal {
         } catch (_: Throwable) { }
         return changed
     }
+    
+    // Helper: recursive copy (SAF) — возвращает кол-во файлов скопированных
+private fun recursiveCopySAF(ctx: Context, src: DocumentFile, destDir: DocumentFile): Int {
+    var count = 0
+    if (src.isDirectory) {
+        for (child in src.listFiles()) {
+            if (child.isDirectory) {
+                val newDir = destDir.createDirectory(child.name ?: "dir") ?: continue
+                count += recursiveCopySAF(ctx, child, newDir)
+            } else {
+                val newFile = destDir.createFile(child.type ?: "application/octet-stream", child.name ?: "file")
+                if (newFile != null) {
+                    copyFile(ctx, child.uri, newFile.uri)
+                    count++
+                }
+            }
+        }
+    } else {
+        val newFile = destDir.createFile(src.type ?: "application/octet-stream", src.name ?: "file")
+        if (newFile != null) {
+            copyFile(ctx, src.uri, newFile.uri)
+            count++
+        }
+    }
+    return count
+}
+
+// Helper: compute hash (MD5/SHA-256) for a DocumentFile. Returns hex string or null.
+private fun computeHashForSAF(ctx: Context, doc: DocumentFile, algo: String): String? {
+    return try {
+        val md = java.security.MessageDigest.getInstance(algo)
+        ctx.contentResolver.openInputStream(doc.uri)?.use { ins ->
+            val buf = ByteArray(8192)
+            var r: Int
+            while (ins.read(buf).also { r = it } > 0) {
+                md.update(buf, 0, r)
+            }
+        } ?: return null
+        md.digest().toHexString()
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+// ByteArray -> hex
+private fun ByteArray.toHexString(): String {
+    val sb = StringBuilder()
+    for (b in this) sb.append(String.format("%02x", b))
+    return sb.toString()
+}
+
+// copy InputStream -> File (helper used in filekey)
+private fun java.io.OutputStream.copyFrom(input: java.io.InputStream) {
+    val buf = ByteArray(8192)
+    var r: Int
+    while (input.read(buf).also { r = it } > 0) {
+        this.write(buf, 0, r)
+    }
+}
+
+// convenient extension to write InputStream -> File
+private fun java.io.File.outputStream(): java.io.FileOutputStream = java.io.FileOutputStream(this)
+
+// small wrapper for create+copy used earlier (filekey)
+private fun java.io.File.writeFromInputStream(ins: java.io.InputStream) {
+    this.outputStream().use { out -> ins.copyTo(out) }
+}
 
     // ---------------------------
     // Encrypt / Decrypt helpers
