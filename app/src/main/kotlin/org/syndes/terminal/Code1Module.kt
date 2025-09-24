@@ -15,9 +15,8 @@ import kotlin.math.max
  * - if exists <path> -> true if path exists in work dir (supports absolute home/... or relative)
  * - if size <|>|= N <path> -> compare size in bytes (supports suffix K/M)
  *
- * Module returns ModuleResult (does NOT execute actions directly).
+ * Module возвращает ModuleResult (НЕ выполняет действия напрямую).
  */
-
 object Code1Module {
 
     private val TIME_PATTERN = Pattern.compile("""^if\s+time\s+(\d{1,2}:\d{2})\s*$""", Pattern.CASE_INSENSITIVE)
@@ -52,10 +51,7 @@ object Code1Module {
         } catch (_: Throwable) { 0L }
     }
 
-    /**
-     * Resolve path inside work dir (SAF). Mirrors Terminal.resolvePath semantics enough for checks.
-     * Returns DocumentFile if target file/folder found, or null.
-     */
+    /** Resolve path inside work dir (SAF). */
     private fun resolveInWork(ctx: Context, path: String): DocumentFile? {
         val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
         val uriStr = prefs.getString("work_dir_uri", null) ?: return null
@@ -64,13 +60,13 @@ object Code1Module {
         var components = path.split("/").filter { it.isNotEmpty() }.toMutableList()
         var curDir = root
 
-        // absolute support: leading "/" or starting with "home"
         if (path.startsWith("/") || components.firstOrNull()?.equals("home", ignoreCase = true) == true) {
             curDir = root
-            if (components.firstOrNull()?.equals("home", ignoreCase = true) == true) components = components.drop(1).toMutableList()
+            if (components.firstOrNull()?.equals("home", ignoreCase = true) == true) {
+                components = components.drop(1).toMutableList()
+            }
         } else {
-            // relative: start from current_dir if set
-            val curUri = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE).getString("current_dir_uri", null)
+            val curUri = prefs.getString("current_dir_uri", null)
             curUri?.let {
                 val cur = try { DocumentFile.fromTreeUri(ctx, android.net.Uri.parse(it)) } catch (_: Throwable) { null }
                 if (cur != null) curDir = cur
@@ -81,7 +77,7 @@ object Code1Module {
 
         for (comp in components) {
             when (comp) {
-                "." -> { /* nothing */ }
+                "." -> {}
                 ".." -> {
                     val parent = curDir.parentFile
                     if (parent != null && parent.uri != root.uri) curDir = parent
@@ -116,21 +112,26 @@ object Code1Module {
                     target.set(Calendar.SECOND, 0)
                     target.set(Calendar.MILLISECOND, 0)
                     if (target.timeInMillis <= now.timeInMillis) target.add(Calendar.DAY_OF_YEAR, 1)
+
                     val delay = target.timeInMillis - now.timeInMillis
                     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                    ModuleResult.Scheduled(info = "scheduled at ${sdf.format(target.time)}", delayMillis = delay, actions = actions)
+                    val id = runtime.scheduleActionsDelay("timeTask-${hour}-${minute}-${System.currentTimeMillis()}", delay, actions)
+                    ModuleResult.Scheduled("scheduled at ${sdf.format(target.time)} (delay ${delay} ms), id=$id")
                 }
 
                 "wait" -> {
                     val secs = match.groups.getOrNull(0)?.toLongOrNull() ?: return ModuleResult.Error("bad wait")
-                    ModuleResult.Scheduled(info = "scheduled after ${secs}s", delayMillis = secs * 1000L, actions = actions)
+                    val delay = secs * 1000L
+                    val id = runtime.scheduleActionsDelay("waitTask-${System.currentTimeMillis()}", delay, actions)
+                    ModuleResult.Scheduled("scheduled after ${secs}s, id=$id")
                 }
 
                 "exists" -> {
                     val p = match.groups.getOrNull(0)?.trim() ?: return ModuleResult.Error("bad path")
                     val found = resolveInWork(ctx, p)
                     if (found != null) {
-                        ModuleResult.Executed(info = "exists: $p", actions = actions)
+                        runtime.executeActionsNow(actions)
+                        ModuleResult.Executed("exists: $p")
                     } else ModuleResult.Error("not found: $p")
                 }
 
@@ -140,7 +141,6 @@ object Code1Module {
                     val p = match.groups.getOrNull(2) ?: return ModuleResult.Error("bad path")
                     val needed = parseBytesWithSuffix(numStr)
                     val found = resolveInWork(ctx, p) ?: return ModuleResult.Error("not found: $p")
-                    // compute size (recursive if dir)
                     val size = calculateSize(found)
                     val ok = when (cmp) {
                         ">" -> size > needed
@@ -150,8 +150,10 @@ object Code1Module {
                         "=" -> size == needed
                         else -> false
                     }
-                    return if (ok) ModuleResult.Executed(info = "size check passed ($size bytes for $p)", actions = actions)
-                    else ModuleResult.Error("size check failed ($size bytes for $p, need $cmp $needed)")
+                    if (ok) {
+                        runtime.executeActionsNow(actions)
+                        ModuleResult.Executed("size check passed ($size bytes for $p)")
+                    } else ModuleResult.Error("size check failed ($size bytes for $p, need $cmp $needed)")
                 }
 
                 else -> ModuleResult.Error("unsupported match type")
