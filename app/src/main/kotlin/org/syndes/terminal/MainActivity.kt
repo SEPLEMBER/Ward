@@ -1,6 +1,7 @@
 package org.syndes.terminal
 
 import android.content.Context
+import android.graphics.Color
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import android.text.Spanned
@@ -39,6 +40,15 @@ class MainActivity : AppCompatActivity() {
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
         terminalOutput.append(colorize("Welcome to Syndes Terminal!\nType 'help' to see commands.\n\n", infoColor))
 
+        // Переопределяем кнопку: текстовый вид, жёлтый цвет (вшитый)
+        sendButton.text = "RUN" // можно поставить "=>" если хотите
+        // жёлтый «вшитый» цвет — используем явное значение в коде как попросили
+        val embeddedYellow = Color.parseColor("#FFD54F") // мягкий жёлтый/янтарный
+        sendButton.setTextColor(embeddedYellow)
+        // делаем фон прозрачным, чтобы выглядело как текст
+        sendButton.setBackgroundColor(Color.TRANSPARENT)
+        // можно оставить шрифт моноспейс в xml, или дополнительно здесь
+
         // Обработчики
         sendButton.setOnClickListener { sendCommand() }
 
@@ -61,29 +71,35 @@ class MainActivity : AppCompatActivity() {
         val command = inputField.text.toString().trim()
         if (command.isEmpty()) return
 
-        // цвета
+        // цвета (ресурсные)
         val inputColor = ContextCompat.getColor(this, R.color.color_command)
         val errorColor = ContextCompat.getColor(this, R.color.color_error)
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
         val defaultColor = ContextCompat.getColor(this, R.color.terminal_text)
+        // вшитый системный жёлтый, используется для mem/device и подобных
+        val systemYellow = Color.parseColor("#FFD54F")
 
         // подсветка команды
         terminalOutput.append(colorize("\n> $command\n", inputColor))
 
-        // Выполнение команды — предполагается сигнатура execute(command, context): String?
-        // Terminal может сам стартовать SettingsActivity и вернуть null (в этом случае мы ничего не добавляем).
+        // Выполнение команды
         val result: String? = try {
             terminal.execute(command, this)
         } catch (t: Throwable) {
-            // На случай, если Terminal ещё не адаптирован — показываем аккуратно
             "Error: command execution failed"
         }
 
         if (result != null) {
-            // выбираем цвет результата по префиксу
+            // определяем цвет результата в следующем порядке:
+            // 1) ошибки -> errorColor
+            // 2) строки, начинающиеся с "Info" -> infoColor
+            // 3) если команда относится к системной информации (mem/device/usha) -> systemYellow
+            // 4) иначе -> defaultColor
+            val firstToken = command.split("\\s+".toRegex()).firstOrNull()?.lowercase() ?: ""
             val resultColor = when {
                 result.startsWith("Error", ignoreCase = true) -> errorColor
                 result.startsWith("Info", ignoreCase = true) -> infoColor
+                firstToken in setOf("mem", "device", "uname", "uptime", "date") -> systemYellow
                 else -> defaultColor
             }
             terminalOutput.append(colorize(result + "\n", resultColor))
