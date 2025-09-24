@@ -53,7 +53,7 @@ class Terminal {
             parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
         }
 
-        // Подставляем алиас, если есть
+        // Подставляем алиас, если есть (простая подстановка первого токена)
         if (cmdName in aliases) {
             val aliasCmd = aliases[cmdName]!!
             val aliasTokens = aliasCmd.split("\\s+".toRegex())
@@ -73,6 +73,7 @@ class Terminal {
                       echo <text>     - print text (supports > file for redirect)
                       open <app name> - launch app by visible name (e.g. open Minecraft)
                       open <file>     - open file in associated app (e.g. open file.txt)
+                      launch <app>    - explicitly launch app (alias to open-app)
                       history         - show input history
                       clear           - clear terminal history (internal)
                       settings|console- open settings screen
@@ -93,16 +94,21 @@ class Terminal {
                       du <file|dir>   - show size in bytes (recursive for dirs, supports paths)
                       stat <path>     - show file/dir stats (size, type, modified)
                       find <name>     - find files by name in current dir
+                      cmp <f1> <f2>   - compare two text files (line-by-line)
+                      diff <f1> <f2>  - show differences with line numbers
+                      replace <old> <new> <path> - replace text in file or recursively in directory
                       pm list [user|system] - list installed packages (all or filtered)
                       pm install <apk>- install APK from work dir (supports paths)
-                      pm uninstall <pkg> - uninstall package
-                      pm launch <pkg> - launch package
+                      pm uninstall <pkg|appname> - uninstall package or app by name
+                      pm launch <pkg|appname> - launch package or app by name
                       date            - show current date/time
                       whoami          - show user info
                       uname           - show system info
                       uptime          - show system uptime
                       which <cmd>     - check if command exists
                       alias <name>=<command> - set alias
+                      alias list      - list aliases
+                      alias run <name>- run alias
                       unalias <name>  - remove alias
                       env             - show environment vars
                       sms [number] [text] - open SMS app (with number and text)
@@ -119,6 +125,8 @@ class Terminal {
                       syd list                 - list scripts in work_dir/scripts
                       syd run <name>           - run script (name or name.syd)
                       syd stop <script-id>     - stop running script (id returned on start)
+                      syd edit <name>          - open script for editing (if editor available)
+                      syd validate <name>      - validate syntax using ScriptHandler
                       run <name>               - alias for 'syd run <name>'
                       
                     Extras:
@@ -199,7 +207,11 @@ class Terminal {
                             val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
                             val content = try { ctx.contentResolver.openInputStream(scriptDoc.uri)?.bufferedReader()?.use { it.readText() } } catch (_: Throwable) { null }
                             if (content == null) return "Error: cannot read script"
-                            return ScriptHandler.validateScriptText(ctx, content)
+                            return try {
+                                ScriptHandler.validateScriptText(ctx, content)
+                            } catch (t: Throwable) {
+                                "Error: validation failed: ${t.message ?: "unknown"}"
+                            }
                         }
                         else -> {
                             "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
@@ -280,9 +292,31 @@ class Terminal {
                     }
                 }
 
+                // explicit app launch (separate command)
+                "launch" -> {
+                    if (args.isEmpty()) return "Usage: launch <app name or package>"
+                    val target = args.joinToString(" ")
+                    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target)
+                    if (pkg == null) return "Error: app not found: $target"
+                    val li = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: return "Error: no launch intent for $pkg"
+                    if (ctx !is Activity) li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(li)
+                    "Info: launching $pkg"
+                }
+
                 "history" -> {
                     if (history.isEmpty()) "(no history)"
                     else history.joinToString("\n")
+                }
+
+                "matrix" -> {
+                    // hidden easter-egg: matrix fall -> open settings for now
+                    if (args.getOrNull(0)?.lowercase() == "fall") {
+                        val intent = Intent(ctx, SettingsActivity::class.java)
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    } else "Unknown matrix command"
                 }
 
                 "clear" -> {
@@ -484,20 +518,108 @@ class Terminal {
                     if (results.isEmpty()) "No matches found." else results
                 }
 
+                // compare files line-by-line
+                "cmp" -> {
+                    if (args.size < 2) return "Usage: cmp <file1> <file2>"
+                    val f1path = args[0]; val f2path = args[1]
+                    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
+                    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
+                    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
+                    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
+                    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
+                    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
+                    val maxLines = max(lines1.size, lines2.size)
+                    for (i in 0 until maxLines) {
+                        val a = lines1.getOrNull(i)
+                        val b = lines2.getOrNull(i)
+                        if (a != b) {
+                            return "Differ at line ${i+1}:\n< $a\n> $b"
+                        }
+                    }
+                    "Equal"
+                }
+
+                // diff: show simple differences with line numbers
+                "diff" -> {
+                    if (args.size < 2) return "Usage: diff <file1> <file2>"
+                    val f1path = args[0]; val f2path = args[1]
+                    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
+                    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
+                    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
+                    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
+                    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
+                    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
+                    val sb = StringBuilder()
+                    val maxLines = max(lines1.size, lines2.size)
+                    for (i in 0 until maxLines) {
+                        val a = lines1.getOrNull(i)
+                        val b = lines2.getOrNull(i)
+                        if (a != b) {
+                            sb.appendLine("Line ${i+1}:")
+                            sb.appendLine("  - $a")
+                            sb.appendLine("  + $b")
+                        }
+                    }
+                    if (sb.isEmpty()) "No differences" else sb.toString()
+                }
+
+                // replace old->new in file or recursively in directory
+                "replace" -> {
+                    if (args.size < 3) return "Usage: replace <old> <new> <path>"
+                    val old = args[0]
+                    val new = args[1]
+                    val path = args.drop(2).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val changed = if (target.isDirectory) {
+                        replaceInDirRecursive(ctx, target, old, new)
+                    } else {
+                        val ok = replaceInFile(ctx, target, old, new)
+                        if (ok) 1 else 0
+                    }
+                    "Info: replaced in $changed file(s)"
+                }
+
                 "alias" -> {
-                    if (args.isEmpty()) return "Error: alias <name>=<command>"
-                    val aliasStr = args.joinToString(" ")
-                    val parts = aliasStr.split("=", limit = 2)
-                    if (parts.size < 2) return "Error: invalid format <name>=<command>"
-                    val aliasName = parts[0].trim().lowercase()
-                    val aliasCmd = parts[1].trim()
-                    val currentAliases = prefs.getString("aliases", "") ?: ""
-                    val newAliasesList = currentAliases.split(";").filter { it.isNotBlank() }.toMutableList()
-                    newAliasesList.removeAll { it.split("=")[0].trim().lowercase() == aliasName }
-                    newAliasesList.add("$aliasName=$aliasCmd")
-                    val newAliases = newAliasesList.joinToString(";")
-                    prefs.edit().putString("aliases", newAliases).apply()
-                    "Info: alias set: $aliasName=$aliasCmd"
+                    // extended alias support: "alias list", "alias run <name>", or "alias name=cmd"
+                    if (args.isEmpty()) return "Usage: alias <name>=<command> | alias list | alias run <name>"
+                    val sub = args[0]
+                    when (sub) {
+                        "list" -> {
+                            val curr = prefs.getString("aliases", "") ?: ""
+                            if (curr.isBlank()) "No aliases" else curr.split(";").filter { it.isNotBlank() }.joinToString("\n")
+                        }
+                        "run" -> {
+                            val name = args.drop(1).joinToString(" ").trim().lowercase()
+                            if (name.isEmpty()) return "Usage: alias run <name>"
+                            val curr = prefs.getString("aliases", "") ?: ""
+                            val map = curr.split(";").filter { it.isNotBlank() }.associate {
+                                val parts = it.split("=", limit = 2)
+                                parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
+                            }
+                            val cmd = map[name] ?: return "Error: alias '$name' not found"
+                            // execute aliased command (careful about loops)
+                            return try {
+                                execute(cmd, ctx)
+                            } catch (t: Throwable) {
+                                "Error: failed to run alias: ${t.message ?: "unknown"}"
+                            }
+                        }
+                        else -> {
+                            val aliasStr = args.joinToString(" ")
+                            val parts = aliasStr.split("=", limit = 2)
+                            if (parts.size < 2) return "Error: invalid format <name>=<command>"
+                            val aliasName = parts[0].trim().lowercase()
+                            val aliasCmd = parts[1].trim()
+                            val currentAliases = prefs.getString("aliases", "") ?: ""
+                            val newAliasesList = currentAliases.split(";").filter { it.isNotBlank() }.toMutableList()
+                            newAliasesList.removeAll { it.split("=")[0].trim().lowercase() == aliasName }
+                            newAliasesList.add("$aliasName=$aliasCmd")
+                            val newAliases = newAliasesList.joinToString(";")
+                            prefs.edit().putString("aliases", newAliases).apply()
+                            "Info: alias set: $aliasName=$aliasCmd"
+                        }
+                    }
                 }
 
                 "unalias" -> {
@@ -634,8 +756,10 @@ class Terminal {
                             "Info: installing $apkPath"
                         }
                         "uninstall" -> {
-                            if (args.size < 2) return "Error: pm uninstall <pkg>"
-                            val pkg = args[1]
+                            if (args.size < 2) return "Error: pm uninstall <pkg or appname>"
+                            val target = args[1]
+                            // if looks like a package (contains dot) use as-is; otherwise try to resolve by visible name
+                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: target
                             val intent = Intent(Intent.ACTION_DELETE).apply {
                                 data = Uri.parse("package:$pkg")
                                 if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -644,8 +768,9 @@ class Terminal {
                             "Info: uninstalling $pkg"
                         }
                         "launch" -> {
-                            if (args.size < 2) return "Error: pm launch <pkg>"
-                            val pkg = args[1]
+                            if (args.size < 2) return "Error: pm launch <pkg or appname>"
+                            val target = args[1]
+                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: target
                             val launchIntent = ctx.packageManager.getLaunchIntentForPackage(pkg)
                             if (launchIntent != null) {
                                 if (ctx !is Activity) launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -683,12 +808,12 @@ class Terminal {
                 "which" -> {
                     if (args.isEmpty()) return "Error: which <command>"
                     val cmd = args[0].lowercase()
-                    val knownCommands = listOf("help", "about", "echo", "open", "history", "clear", "settings", "console", "clearwork",
+                    val knownCommands = listOf("help", "about", "echo", "open", "launch", "history", "clear", "settings", "console", "clearwork",
                         "ls", "dir", "cd", "pwd", "cp", "mv", "rm", "mkdir", "touch", "cat", "ln", "wc", "head", "tail", "du", "stat", "find",
                         "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
                         "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
                         "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
-                        "notif", "acc", "dev", "syd", "run", "mem", "device")
+                        "notif", "acc", "dev", "syd", "run", "mem", "device", "cmp", "diff", "replace", "matrix")
                     if (knownCommands.contains(cmd)) {
                         "$cmd: built-in command"
                     } else {
@@ -872,7 +997,7 @@ class Terminal {
     }
 
     // ---------------------------
-    // Helpers for script discovery
+    // Helpers for replace / scripts discovery
     // ---------------------------
     /**
      * Ищет скрипт по имени в work_dir/scripts, затем в work root.
@@ -919,6 +1044,36 @@ class Terminal {
         if (match != null && match.isFile) return match
 
         return null
+    }
+
+    // Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
+    private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
+        return try {
+            val input = ctx.contentResolver.openInputStream(doc.uri) ?: return false
+            val text = input.bufferedReader().use { it.readText() }
+            if (!text.contains(old)) return false
+            val replaced = text.replace(old, new)
+            val out = ctx.contentResolver.openOutputStream(doc.uri, "wt") ?: return false
+            out.use { it.write(replaced.toByteArray()) }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    // Recursively replace in directory; returns count of files changed
+    private fun replaceInDirRecursive(ctx: Context, dir: DocumentFile, old: String, new: String): Int {
+        var changed = 0
+        try {
+            for (child in dir.listFiles()) {
+                if (child.isDirectory) {
+                    changed += replaceInDirRecursive(ctx, child, old, new)
+                } else {
+                    if (replaceInFile(ctx, child, old, new)) changed++
+                }
+            }
+        } catch (_: Throwable) { /* ignore */ }
+        return changed
     }
 
     // ---------------------------
