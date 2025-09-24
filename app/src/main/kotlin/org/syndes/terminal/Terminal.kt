@@ -436,7 +436,7 @@ class Terminal {
     "$algo: $hash"
 }
 
-"pminfo", "pminfo" -> {
+"pminfo", "pkginfo" -> {
     if (args.isEmpty()) return "Usage: pminfo <package_or_appname>"
     val target = args.joinToString(" ")
     val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: return "Error: app not found"
