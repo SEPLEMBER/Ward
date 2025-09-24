@@ -17,7 +17,7 @@ object Secure {
     private const val SALT_LENGTH_BYTES = 32
     private const val IV_LENGTH_BYTES = 12
     private const val TAG_LENGTH_BITS = 128
-    private const val PBKDF2_ITERATIONS = 75_000
+    private const val PBKDF2_ITERATIONS = 12_000
     private const val KEY_LENGTH_BITS = 256
     private const val PBKDF2_ALGORITHM = "PBKDF2WithHmacSHA256"
     private const val CIPHER_ALGORITHM = "AES/GCM/NoPadding"
