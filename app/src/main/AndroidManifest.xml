@@ -1,6 +1,13 @@
+
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="org.syndes.terminal">
+
+    <!-- Разрешение, позволяющее приложению инициировать удаление пакетов через PackageInstaller APIs.
+         В большинстве случаев для обычного вызова ACTION_DELETE системное подтверждение требуется и
+         дополнительных runtime разрешений не нужно, но декларация в манифесте полезна. -->
+    <uses-permission android:name="android.permission.REQUEST_DELETE_PACKAGES" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Блок queries вместо QUERY_ALL_PACKAGES -->
     <queries>
