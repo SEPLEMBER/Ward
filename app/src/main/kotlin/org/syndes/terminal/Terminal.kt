@@ -29,24 +29,31 @@ class Terminal {
     /**
      * Выполняет команду и возвращает текстовый результат.
      * Если команда открывает SettingsActivity - возвращает null (MainActivity не выводит ничего).
-     *
-     * Важно: execute вызывается из MainActivity и передаётся Activity как context,
-     * чтобы команды, запускающие Activity, работали корректно.
      */
     fun execute(commandRaw: String, ctx: Context): String? {
         val command = commandRaw.trim()
         if (command.isEmpty()) return ""
 
+        // check wait mode
+        val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
+        val waitUntil = prefs.getLong("wait_until", 0L)
+        val now = System.currentTimeMillis()
+        if (now < waitUntil) {
+            val rem = (waitUntil - now + 999) / 1000
+            return "Wait active: $rem s remaining"
+        }
+
         // сохраняем в историю (как введено)
         history.add(command)
 
         // разбиваем на токены
-        val tokens = command.split("\\s+".toRegex())
+        val tokens = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+        if (tokens.isEmpty()) return ""
+
         var cmdName = tokens[0].lowercase()
         var args = tokens.drop(1)
 
         // Загружаем алиасы
-        val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
         val aliasesStr = prefs.getString("aliases", "") ?: ""
         val aliases = aliasesStr.split(";").filter { it.isNotBlank() }.associate {
             val parts = it.split("=", limit = 2)
@@ -56,7 +63,7 @@ class Terminal {
         // Подставляем алиас, если есть (простая подстановка первого токена)
         if (cmdName in aliases) {
             val aliasCmd = aliases[cmdName]!!
-            val aliasTokens = aliasCmd.split("\\s+".toRegex())
+            val aliasTokens = aliasCmd.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (aliasTokens.isNotEmpty()) {
                 cmdName = aliasTokens[0].lowercase()
                 args = aliasTokens.drop(1) + args
@@ -97,6 +104,10 @@ class Terminal {
                       cmp <f1> <f2>   - compare two text files (line-by-line)
                       diff <f1> <f2>  - show differences with line numbers
                       replace <old> <new> <path> - replace text in file or recursively in directory
+                      rename <old> <new> <path> - rename filenames in dir (substring replace; use {} in new for counter)
+                      encrypt <password> <path> - encrypt text files (recursively if dir)
+                      decrypt <password> <path> - decrypt text files (recursively if dir)
+                      wait <seconds>  - block commands for given seconds (persist until timeout)
                       pm list [user|system] - list installed packages (all or filtered)
                       pm install <apk>- install APK from work dir (supports paths)
                       pm uninstall <pkg|appname> - uninstall package or app by name
@@ -116,10 +127,7 @@ class Terminal {
                       email [address] [subject] [body] - open email app (with address, subject, body)
                       browser [url]   - open browser (with URL)
                       search <query>  - web search query
-                      contacts        - open contacts app
-                      alarm           - open alarm app
-                      calc            - open calculator
-                      vpns, btss, wifi, bts, data, apm, snd, dsp, apps, stg, sec, loc, nfc, cam, clk, notif, acc, dev
+                      contacts, alarm, calc, vpns, btss, wifi, bts, data, apm, snd, dsp, apps, stg, sec, loc, nfc, cam, clk, notif, acc, dev
                       
                     Script support (syd):
                       syd list                 - list scripts in work_dir/scripts
@@ -128,10 +136,6 @@ class Terminal {
                       syd edit <name>          - open script for editing (if editor available)
                       syd validate <name>      - validate syntax using ScriptHandler
                       run <name>               - alias for 'syd run <name>'
-                      
-                    Extras:
-                      mem [package]            - memory info (overall or per-package PSS when possible)
-                      device                   - device details (CPU/ABI/memory/build)
                     """.trimIndent()
                 }
 
@@ -140,14 +144,22 @@ class Terminal {
                 }
 
                 // -------------------------
+                // wait command
+                // -------------------------
+                "wait" -> {
+                    if (args.isEmpty()) return "Usage: wait <seconds>"
+                    val secs = args[0].toLongOrNull() ?: return "Error: invalid seconds"
+                    val until = System.currentTimeMillis() + secs * 1000L
+                    prefs.edit().putLong("wait_until", until).apply()
+                    "Info: set wait for $secs s"
+                }
+
+                // -------------------------
                 // Script commands: syd / run
                 // -------------------------
                 "syd", "script" -> {
-                    // subcommands: list | run <name> | stop <id> | edit <name> | validate <name>
                     val sub = args.getOrNull(0)?.lowercase()
-                    if (sub == null) {
-                        return "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
-                    }
+                    if (sub == null) return "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
                     when (sub) {
                         "list" -> {
                             val root = getRootDir(ctx) ?: return "Error: work folder not set."
@@ -213,14 +225,11 @@ class Terminal {
                                 "Error: validation failed: ${t.message ?: "unknown"}"
                             }
                         }
-                        else -> {
-                            "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
-                        }
+                        else -> "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
                     }
                 }
 
                 "run" -> {
-                    // alias for syd run
                     val name = args.joinToString(" ").trim()
                     if (name.isEmpty()) return "Usage: run <scriptname>"
                     val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
@@ -257,7 +266,6 @@ class Terminal {
                     val target = args.joinToString(" ")
                     val pkg = findPackageByName(ctx, target)
                     if (pkg != null) {
-                        // Это приложение
                         val pm = ctx.packageManager
                         val launchIntent = pm.getLaunchIntentForPackage(pkg)
                         if (launchIntent != null) {
@@ -279,7 +287,7 @@ class Terminal {
                             }
                         }
                     } else {
-                        // Пробуем как файл
+                        // Пробуем как файл (поддержка home/relative)
                         val (parent, fileName) = resolvePath(ctx, target) ?: return "Error: invalid path"
                         val file = parent.findFile(fileName) ?: return "Error: no such file '$target'"
                         val intent = Intent(Intent.ACTION_VIEW).apply {
@@ -292,7 +300,6 @@ class Terminal {
                     }
                 }
 
-                // explicit app launch (separate command)
                 "launch" -> {
                     if (args.isEmpty()) return "Usage: launch <app name or package>"
                     val target = args.joinToString(" ")
@@ -310,7 +317,6 @@ class Terminal {
                 }
 
                 "matrix" -> {
-                    // hidden easter-egg: matrix fall -> open settings for now
                     if (args.getOrNull(0)?.lowercase() == "fall") {
                         val intent = Intent(ctx, SettingsActivity::class.java)
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -496,7 +502,7 @@ class Terminal {
                     val (parent, entryName) = resolvePath(ctx, path) ?: return "Error: invalid path"
                     val target = parent.findFile(entryName) ?: return "Error: no such file '$path'"
                     val size = calculateSize(target)
-                    "$size $path"
+                    "${humanReadableBytes(size)} ($size bytes) $path"
                 }
 
                 "stat" -> {
@@ -507,7 +513,7 @@ class Terminal {
                     val size = target.length()
                     val type = target.type ?: "unknown"
                     val modified = SimpleDateFormat("yyyy-MM-dd HH:mm:ss").format(Date(target.lastModified()))
-                    "Size: $size bytes\nType: $type\nModified: $modified"
+                    "Size: ${humanReadableBytes(size)} ($size bytes)\nType: $type\nModified: $modified"
                 }
 
                 "find" -> {
@@ -533,7 +539,7 @@ class Terminal {
                         val a = lines1.getOrNull(i)
                         val b = lines2.getOrNull(i)
                         if (a != b) {
-                            return "Differ at line ${i+1}:\n< $a\n> $b"
+                            return "Differ at line ${i+1}:\n< ${a ?: "<no line>"}\n> ${b ?: "<no line>"}"
                         }
                     }
                     "Equal"
@@ -556,8 +562,8 @@ class Terminal {
                         val b = lines2.getOrNull(i)
                         if (a != b) {
                             sb.appendLine("Line ${i+1}:")
-                            sb.appendLine("  - $a")
-                            sb.appendLine("  + $b")
+                            sb.appendLine("  - ${a ?: "<no line>"}")
+                            sb.appendLine("  + ${b ?: "<no line>"}")
                         }
                     }
                     if (sb.isEmpty()) "No differences" else sb.toString()
@@ -580,8 +586,65 @@ class Terminal {
                     "Info: replaced in $changed file(s)"
                 }
 
+                // rename filenames in directory (substring replacement in filenames)
+                "rename" -> {
+                    if (args.size < 3) return "Usage: rename <old> <new> <dir>"
+                    val old = args[0]
+                    val new = args[1]
+                    val path = args.drop(2).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val dir = parent.findFile(name) ?: return "Error: no such directory '$path'"
+                    if (!dir.isDirectory) return "Error: target is not a directory"
+                    var counter = 1
+                    var changed = 0
+                    for (child in dir.listFiles()) {
+                        val nm = child.name ?: continue
+                        if (nm.contains(old)) {
+                            val repl = if (new.contains("{}")) new.replace("{}", counter.toString()) else nm.replace(old, new)
+                            // try to rename: SAF doesn't have rename API everywhere; create new file and copy
+                            val mime = child.type ?: "application/octet-stream"
+                            val newFile = dir.createFile(mime, repl)
+                            if (newFile != null) {
+                                copyFile(ctx, child.uri, newFile.uri)
+                                child.delete()
+                                changed++
+                                counter++
+                            }
+                        }
+                    }
+                    "Info: renamed $changed file(s)"
+                }
+
+                // encrypt / decrypt (text files only)
+                "encrypt" -> {
+                    if (args.size < 2) return "Usage: encrypt <password> <path>"
+                    val password = args[0]
+                    val path = args.drop(1).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val processed = if (target.isDirectory) {
+                        encryptInDir(ctx, password, target)
+                    } else {
+                        if (encryptFile(ctx, password, target)) 1 else 0
+                    }
+                    "Info: encrypted $processed file(s)"
+                }
+
+                "decrypt" -> {
+                    if (args.size < 2) return "Usage: decrypt <password> <path>"
+                    val password = args[0]
+                    val path = args.drop(1).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val processed = if (target.isDirectory) {
+                        decryptInDir(ctx, password, target)
+                    } else {
+                        if (decryptFile(ctx, password, target)) 1 else 0
+                    }
+                    "Info: decrypted $processed file(s)"
+                }
+
                 "alias" -> {
-                    // extended alias support: "alias list", "alias run <name>", or "alias name=cmd"
                     if (args.isEmpty()) return "Usage: alias <name>=<command> | alias list | alias run <name>"
                     val sub = args[0]
                     when (sub) {
@@ -598,7 +661,6 @@ class Terminal {
                                 parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
                             }
                             val cmd = map[name] ?: return "Error: alias '$name' not found"
-                            // execute aliased command (careful about loops)
                             return try {
                                 execute(cmd, ctx)
                             } catch (t: Throwable) {
@@ -637,9 +699,7 @@ class Terminal {
                     prefs.all.entries.joinToString("\n") { "${it.key}=${it.value}" }
                 }
 
-                // -------------------------
                 // Communication / quick apps
-                // -------------------------
                 "sms" -> {
                     val intent = if (args.isEmpty()) {
                         Intent(Intent.ACTION_MAIN).apply { addCategory(Intent.CATEGORY_APP_MESSAGING) }
@@ -682,11 +742,17 @@ class Terminal {
                 }
 
                 "browser" -> {
-                    val url = if (args.isEmpty()) "https://" else args.joinToString(" ")
+                    // ensure scheme present
+                    var url = if (args.isEmpty()) "https://" else args.joinToString(" ")
+                    if (!url.contains("://")) url = "https://$url"
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening browser"
+                    try {
+                        ctx.startActivity(intent)
+                        "Info: opening browser"
+                    } catch (ise: Exception) {
+                        "Error: no activity found to handle URL"
+                    }
                 }
 
                 "search" -> {
@@ -758,8 +824,7 @@ class Terminal {
                         "uninstall" -> {
                             if (args.size < 2) return "Error: pm uninstall <pkg or appname>"
                             val target = args[1]
-                            // if looks like a package (contains dot) use as-is; otherwise try to resolve by visible name
-                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: target
+                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: return "Error: app not found: $target"
                             val intent = Intent(Intent.ACTION_DELETE).apply {
                                 data = Uri.parse("package:$pkg")
                                 if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -770,7 +835,7 @@ class Terminal {
                         "launch" -> {
                             if (args.size < 2) return "Error: pm launch <pkg or appname>"
                             val target = args[1]
-                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: target
+                            val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: return "Error: app not found: $target"
                             val launchIntent = ctx.packageManager.getLaunchIntentForPackage(pkg)
                             if (launchIntent != null) {
                                 if (ctx !is Activity) launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -813,7 +878,7 @@ class Terminal {
                         "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
                         "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
                         "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
-                        "notif", "acc", "dev", "syd", "run", "mem", "device", "cmp", "diff", "replace", "matrix")
+                        "notif", "acc", "dev", "syd", "run", "mem", "device", "cmp", "diff", "replace", "rename", "encrypt", "decrypt", "matrix")
                     if (knownCommands.contains(cmd)) {
                         "$cmd: built-in command"
                     } else {
@@ -960,19 +1025,18 @@ class Terminal {
                         ?: return "Error: cannot get ActivityManager"
                     val pkg = args.getOrNull(0)
                     if (pkg.isNullOrBlank()) {
-                        // overall memory info
                         val memInfo = ActivityManager.MemoryInfo()
                         am.getMemoryInfo(memInfo)
-                        "AvailMem: ${memInfo.availMem} bytes\nTotalMem: ${memInfo.totalMem} bytes\nLowMemory: ${memInfo.lowMemory}\nThreshold: ${memInfo.threshold}"
+                        "AvailMem: ${humanReadableBytes(memInfo.availMem)}\nTotalMem: ${humanReadableBytes(memInfo.totalMem)}\nLowMemory: ${memInfo.lowMemory}\nThreshold: ${humanReadableBytes(memInfo.threshold)}"
                     } else {
-                        // try to find running process for package
                         val running = am.runningAppProcesses ?: return "Error: cannot get running processes"
                         val proc = running.firstOrNull { it.pkgList?.contains(pkg) == true || it.processName.equals(pkg, ignoreCase = true) }
                         val pid = proc?.pid
                         if (pid == null) return "Error: process for package not found (not running)"
                         val pmi = am.getProcessMemoryInfo(intArrayOf(pid)).firstOrNull()
                             ?: return "Error: cannot get process memory info"
-                        "PSS: ${pmi.totalPss} KB, PrivateDirty: ${pmi.totalPrivateDirty} KB, SharedDirty: ${pmi.totalSharedDirty} KB"
+                        // pmi values are in KB
+                        "PSS: ${pmi.totalPss} KB (${humanReadableBytes(pmi.totalPss.toLong() * 1024)})\nPrivateDirty: ${pmi.totalPrivateDirty} KB\nSharedDirty: ${pmi.totalSharedDirty} KB"
                     }
                 }
 
@@ -983,7 +1047,7 @@ class Terminal {
                     sb.appendLine("Android: ${Build.VERSION.RELEASE} (SDK ${Build.VERSION.SDK_INT})")
                     sb.appendLine("ABI: ${Build.SUPPORTED_ABIS.joinToString(", ")}")
                     sb.appendLine("CPU cores: ${rt.availableProcessors()}")
-                    sb.appendLine("JVM max mem: ${rt.maxMemory()} bytes, total: ${rt.totalMemory()} bytes, free: ${rt.freeMemory()} bytes")
+                    sb.appendLine("JVM max mem: ${humanReadableBytes(rt.maxMemory())}, total: ${humanReadableBytes(rt.totalMemory())}, free: ${humanReadableBytes(rt.freeMemory())}")
                     sb.toString()
                 }
 
@@ -997,17 +1061,12 @@ class Terminal {
     }
 
     // ---------------------------
-    // Helpers for replace / scripts discovery
+    // Helpers for script discovery & replace & encrypt
     // ---------------------------
-    /**
-     * Ищет скрипт по имени в work_dir/scripts, затем в work root.
-     * Поддерживает добавление расширений: .syd, .cyd, .sydscrypt, .txt
-     */
     private fun findScriptFile(ctx: Context, name: String): DocumentFile? {
         val root = getRootDir(ctx) ?: return null
         val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
 
-        // если указан путь (contains '/'), пробуем resolvePath (relative)
         if (name.contains("/")) {
             val full = resolvePath(ctx, name)
             if (full != null) {
@@ -1024,22 +1083,19 @@ class Terminal {
             listOf(".syd", ".cyd", ".sydscrypt", ".txt").forEach { ext ->
                 candidates.add("$name$ext")
             }
-            candidates.add(name) // also exact
+            candidates.add(name)
         }
 
-        // search in scriptsDir
         for (cand in candidates) {
             val f = scriptsDir.findFile(cand)
             if (f != null && f.isFile) return f
         }
 
-        // fallback: search in root directory (non-recursive)
         for (cand in candidates) {
             val f = root.findFile(cand)
             if (f != null && f.isFile) return f
         }
 
-        // as last resort, try to find any file whose name contains 'name' (case-insensitive) in scriptsDir
         val match = scriptsDir.listFiles().firstOrNull { it.name?.lowercase()?.contains(name.lowercase()) == true }
         if (match != null && match.isFile) return match
 
@@ -1061,7 +1117,6 @@ class Terminal {
         }
     }
 
-    // Recursively replace in directory; returns count of files changed
     private fun replaceInDirRecursive(ctx: Context, dir: DocumentFile, old: String, new: String): Int {
         var changed = 0
         try {
@@ -1072,14 +1127,84 @@ class Terminal {
                     if (replaceInFile(ctx, child, old, new)) changed++
                 }
             }
-        } catch (_: Throwable) { /* ignore */ }
+        } catch (_: Throwable) { }
+        return changed
+    }
+
+    // ---------------------------
+    // Encrypt / Decrypt helpers
+    // ---------------------------
+    private fun isProbablyTextFile(ctx: Context, file: DocumentFile): Boolean {
+        return try {
+            ctx.contentResolver.openInputStream(file.uri)?.use { stream ->
+                val buf = ByteArray(1024)
+                val read = stream.read(buf)
+                if (read <= 0) return true
+                for (i in 0 until read) {
+                    if (buf[i].toInt() == 0) return false
+                }
+                true
+            } ?: false
+        } catch (_: Throwable) { false }
+    }
+
+    private fun encryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
+        return try {
+            if (!isProbablyTextFile(ctx, file)) return false
+            val input = ctx.contentResolver.openInputStream(file.uri) ?: return false
+            val text = input.bufferedReader().use { it.readText() }
+            val enc = Secure.encrypt(password, text)
+            val out = ctx.contentResolver.openOutputStream(file.uri, "wt") ?: return false
+            out.use { it.write(enc.toByteArray()) }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun decryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
+        return try {
+            val input = ctx.contentResolver.openInputStream(file.uri) ?: return false
+            val text = input.bufferedReader().use { it.readText() }
+            // try decrypt; if fails - propagate false
+            val dec = try { Secure.decrypt(password, text) } catch (_: Throwable) { return false }
+            val out = ctx.contentResolver.openOutputStream(file.uri, "wt") ?: return false
+            out.use { it.write(dec.toByteArray()) }
+            true
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun encryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
+        var changed = 0
+        try {
+            for (child in dir.listFiles()) {
+                if (child.isDirectory) changed += encryptInDir(ctx, password, child)
+                else {
+                    if (encryptFile(ctx, password, child)) changed++
+                }
+            }
+        } catch (_: Throwable) { }
+        return changed
+    }
+
+    private fun decryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
+        var changed = 0
+        try {
+            for (child in dir.listFiles()) {
+                if (child.isDirectory) changed += decryptInDir(ctx, password, child)
+                else {
+                    if (decryptFile(ctx, password, child)) changed++
+                }
+            }
+        } catch (_: Throwable) { }
         return changed
     }
 
     // ---------------------------
     // Existing helper methods
     // ---------------------------
-
     private fun getRootDir(ctx: Context): DocumentFile? {
         val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
         val uriStr = prefs.getString("work_dir_uri", null) ?: return null
@@ -1154,30 +1279,30 @@ class Terminal {
         val current = getCurrentDir(ctx) ?: return null
         val root = getRootDir(ctx) ?: return null
 
-        val rawComponents = path.split("/").filter { it.isNotEmpty() }
-        val components = rawComponents.toMutableList()
+        // Normalize separators and trim
+        val raw = path.trim()
+        val leadingSlash = raw.startsWith("/")
+        var comps = raw.split("/").filter { it.isNotEmpty() }.toMutableList()
+
         var curDir: DocumentFile = current
 
         // Absolute path handling: leading "/" or initial "home"
-        val absolute = path.startsWith("/") || components.firstOrNull()?.equals("home", ignoreCase = true) == true
+        val absolute = leadingSlash || comps.firstOrNull()?.equals("home", ignoreCase = true) == true
         if (absolute) {
             curDir = root
-            if (components.firstOrNull()?.equals("home", ignoreCase = true) == true) {
-                if (components.size > 0) components.removeAt(0)
+            if (comps.firstOrNull()?.equals("home", ignoreCase = true) == true) {
+                if (comps.isNotEmpty()) comps.removeAt(0)
             }
-        } else {
-            // relative - start from current_dir if present (already assigned)
         }
 
-        // If target itself is root (empty components)
-        if (components.isEmpty()) {
+        if (comps.isEmpty()) {
             return curDir to ""
         }
 
         // iterate through components except last (if not isDir)
-        val endIndexExclusive = components.size - if (isDir) 0 else 1
+        val endIndexExclusive = comps.size - if (isDir) 0 else 1
         for (i in 0 until endIndexExclusive) {
-            val comp = components[i]
+            val comp = comps[i]
             when (comp) {
                 "." -> { /* nop */ }
                 ".." -> {
@@ -1200,7 +1325,7 @@ class Terminal {
             }
         }
 
-        val last = if (components.isEmpty()) "" else components.last()
+        val last = if (comps.isEmpty()) "" else comps.last()
         return curDir to last
     }
 
@@ -1240,5 +1365,23 @@ class Terminal {
 
         // not found
         return null
+    }
+
+    // ---------------------------
+    // Small utilities
+    // ---------------------------
+    private fun humanReadableBytes(b: Long): String {
+        val abs = if (b == Long.MIN_VALUE) Long.MAX_VALUE else kotlin.math.abs(b)
+        if (abs < 1024) return "$b B"
+        val value = abs.toDouble()
+        val units = arrayOf("B", "KB", "MB", "GB", "TB")
+        var idx = 0
+        var v = value
+        while (v >= 1024 && idx < units.size - 1) {
+            v /= 1024.0
+            idx++
+        }
+        val sign = if (b < 0) "-" else ""
+        return String.format("%s%.2f %s", sign, v, units[idx])
     }
 }
