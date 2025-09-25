@@ -378,6 +378,34 @@ class Terminal {
                             val copied = recursiveCopySAF(ctx, src, destDir)
                             "Info: snapshot created: ${buildPath(destDir)} (files copied: $copied)"
                         }
+
+                        "encrypt" -> {
+                    if (args.size < 2) return "Usage: encrypt <password> <path>"
+                    val password = args[0]
+                    val path = args.drop(1).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val processed = if (target.isDirectory) {
+                        encryptInDir(ctx, password, target)
+                    } else {
+                        if (encryptFile(ctx, password, target)) 1 else 0
+                    }
+                    "Info: encrypted $processed file(s)"
+                }
+
+                "decrypt" -> {
+                    if (args.size < 2) return "Usage: decrypt <password> <path>"
+                    val password = args[0]
+                    val path = args.drop(1).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val processed = if (target.isDirectory) {
+                        decryptInDir(ctx, password, target)
+                    } else {
+                        if (decryptFile(ctx, password, target)) 1 else 0
+                    }
+                    "Info: decrypted $processed file(s)"
+                }
   
                           "batchren" -> {
     if (args.size < 2) return "Usage: batchren <dir> <newPattern>"
@@ -1437,77 +1465,79 @@ class Terminal {
     }
 
     // ---------------------------
-    // Helpers for script discovery & replace & encrypt
-    // ---------------------------
-    private fun findScriptFile(ctx: Context, name: String): DocumentFile? {
-        val root = getRootDir(ctx) ?: return null
-        val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
+// Helpers for script discovery & replace & encrypt
+// ---------------------------
+private fun findScriptFile(ctx: Context, name: String): DocumentFile? {
+    val root = getRootDir(ctx) ?: return null
+    val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
 
-        if (name.contains("/")) {
-            val full = resolvePath(ctx, name)
-            if (full != null) {
-                val (parent, fileName) = full
-                val f = parent.findFile(fileName)
-                if (f != null && f.isFile) return f
-            }
-        }
-
-        val candidates = mutableListOf<String>()
-        if (name.contains('.')) {
-            candidates.add(name)
-        } else {
-            listOf(".syd", ".cyd", ".sydscrypt", ".txt").forEach { ext ->
-                candidates.add("$name$ext")
-            }
-            candidates.add(name)
-        }
-
-        for (cand in candidates) {
-            val f = scriptsDir.findFile(cand)
+    if (name.contains("/")) {
+        val full = resolvePath(ctx, name)
+        if (full != null) {
+            val (parent, fileName) = full
+            val f = parent.findFile(fileName)
             if (f != null && f.isFile) return f
         }
-
-        for (cand in candidates) {
-            val f = root.findFile(cand)
-            if (f != null && f.isFile) return f
-        }
-
-        val match = scriptsDir.listFiles().firstOrNull { it.name?.lowercase()?.contains(name.lowercase()) == true }
-        if (match != null && match.isFile) return match
-
-        return null
     }
 
-    // Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
-    private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
-        return try {
-            val input = ctx.contentResolver.openInputStream(doc.uri) ?: return false
+    val candidates = mutableListOf<String>()
+    if (name.contains('.')) {
+        candidates.add(name)
+    } else {
+        listOf(".syd", ".cyd", ".sydscrypt", ".txt").forEach { ext ->
+            candidates.add("$name$ext")
+        }
+        candidates.add(name)
+    }
+
+    for (cand in candidates) {
+        val f = scriptsDir.findFile(cand)
+        if (f != null && f.isFile) return f
+    }
+
+    for (cand in candidates) {
+        val f = root.findFile(cand)
+        if (f != null && f.isFile) return f
+    }
+
+    val match = scriptsDir.listFiles().firstOrNull { it.name?.lowercase()?.contains(name.lowercase()) == true }
+    if (match != null && match.isFile) return match
+
+    return null
+}
+
+// Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
+private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
+    return try {
+        ctx.contentResolver.openInputStream(doc.uri)?.use { input ->
             val text = input.bufferedReader().use { it.readText() }
             if (!text.contains(old)) return false
             val replaced = text.replace(old, new)
-            val out = ctx.contentResolver.openOutputStream(doc.uri, "wt") ?: return false
-            out.use { it.write(replaced.toByteArray()) }
+            ctx.contentResolver.openOutputStream(doc.uri, "wt")?.use { out ->
+                out.write(replaced.toByteArray())
+            } ?: return false
             true
-        } catch (_: Throwable) {
-            false
-        }
+        } ?: false
+    } catch (_: Throwable) {
+        false
     }
+}
 
-    private fun replaceInDirRecursive(ctx: Context, dir: DocumentFile, old: String, new: String): Int {
-        var changed = 0
-        try {
-            for (child in dir.listFiles()) {
-                if (child.isDirectory) {
-                    changed += replaceInDirRecursive(ctx, child, old, new)
-                } else {
-                    if (replaceInFile(ctx, child, old, new)) changed++
-                }
+private fun replaceInDirRecursive(ctx: Context, dir: DocumentFile, old: String, new: String): Int {
+    var changed = 0
+    try {
+        for (child in dir.listFiles()) {
+            if (child.isDirectory) {
+                changed += replaceInDirRecursive(ctx, child, old, new)
+            } else {
+                if (replaceInFile(ctx, child, old, new)) changed++
             }
-        } catch (_: Throwable) { }
-        return changed
-    }
-    
-    // Helper: recursive copy (SAF) — возвращает кол-во файлов скопированных
+        }
+    } catch (_: Throwable) { /* ignore */ }
+    return changed
+}
+
+// Helper: recursive copy (SAF) — возвращает кол-во файлов скопированных
 private fun recursiveCopySAF(ctx: Context, src: DocumentFile, destDir: DocumentFile): Int {
     var count = 0
     if (src.isDirectory) {
@@ -1539,9 +1569,10 @@ private fun computeHashForSAF(ctx: Context, doc: DocumentFile, algo: String): St
         val md = java.security.MessageDigest.getInstance(algo)
         ctx.contentResolver.openInputStream(doc.uri)?.use { ins ->
             val buf = ByteArray(8192)
-            var r: Int
-            while (ins.read(buf).also { r = it } > 0) {
-                md.update(buf, 0, r)
+            var read = ins.read(buf)
+            while (read >= 0) {
+                if (read > 0) md.update(buf, 0, read)
+                read = ins.read(buf)
             }
         } ?: return null
         md.digest().toHexString()
@@ -1552,98 +1583,108 @@ private fun computeHashForSAF(ctx: Context, doc: DocumentFile, algo: String): St
 
 // ByteArray -> hex
 private fun ByteArray.toHexString(): String {
-    val sb = StringBuilder()
+    val sb = StringBuilder(this.size * 2)
     for (b in this) sb.append(String.format("%02x", b))
     return sb.toString()
 }
 
-// copy InputStream -> File (helper used in filekey)
-private fun java.io.OutputStream.copyFrom(input: java.io.InputStream) {
+// Simple stream copy helper (ensures streams are closed by caller or used with use{}).
+private fun streamCopy(input: java.io.InputStream, output: java.io.OutputStream) {
     val buf = ByteArray(8192)
-    var r: Int
-    while (input.read(buf).also { r = it } > 0) {
-        this.write(buf, 0, r)
+    var read = input.read(buf)
+    while (read >= 0) {
+        if (read > 0) output.write(buf, 0, read)
+        read = input.read(buf)
     }
+    output.flush()
 }
 
-// convenient extension to write InputStream -> File
-private fun java.io.File.outputStream(): java.io.FileOutputStream = java.io.FileOutputStream(this)
-
-// small wrapper for create+copy used earlier (filekey)
-private fun java.io.File.writeFromInputStream(ins: java.io.InputStream) {
-    this.outputStream().use { out -> ins.copyTo(out) }
+// human-readable bytes helper
+private fun humanReadableBytes(size: Long): String {
+    if (size < 1024) return "${size} B"
+    val units = listOf("KB", "MB", "GB", "TB")
+    var s = size.toDouble()
+    var uIndex = -1
+    while (s >= 1024 && uIndex < units.size - 1) {
+        s /= 1024.0
+        uIndex++
+    }
+    return if (uIndex == -1) "${size} B" else String.format("%.1f %s", s, units[uIndex])
 }
 
-    // ---------------------------
-    // Encrypt / Decrypt helpers
-    // ---------------------------
-    private fun isProbablyTextFile(ctx: Context, file: DocumentFile): Boolean {
-        return try {
-            ctx.contentResolver.openInputStream(file.uri)?.use { stream ->
-                val buf = ByteArray(1024)
-                val read = stream.read(buf)
-                if (read <= 0) return true
-                for (i in 0 until read) {
-                    if (buf[i].toInt() == 0) return false
-                }
-                true
-            } ?: false
-        } catch (_: Throwable) { false }
-    }
+// ---------------------------
+// Encrypt / Decrypt helpers
+// ---------------------------
+private fun isProbablyTextFile(ctx: Context, file: DocumentFile): Boolean {
+    return try {
+        ctx.contentResolver.openInputStream(file.uri)?.use { stream ->
+            val buf = ByteArray(1024)
+            val read = stream.read(buf)
+            if (read <= 0) return true
+            for (i in 0 until read) {
+                if (buf[i].toInt() == 0) return false
+            }
+            true
+        } ?: false
+    } catch (_: Throwable) { false }
+}
 
-    private fun encryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
-        return try {
-            if (!isProbablyTextFile(ctx, file)) return false
-            val input = ctx.contentResolver.openInputStream(file.uri) ?: return false
+private fun encryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
+    return try {
+        if (!isProbablyTextFile(ctx, file)) return false
+        ctx.contentResolver.openInputStream(file.uri)?.use { input ->
             val text = input.bufferedReader().use { it.readText() }
             val enc = Secure.encrypt(password, text)
-            val out = ctx.contentResolver.openOutputStream(file.uri, "wt") ?: return false
-            out.use { it.write(enc.toByteArray()) }
+            ctx.contentResolver.openOutputStream(file.uri, "wt")?.use { out ->
+                out.write(enc.toByteArray())
+            } ?: return false
             true
-        } catch (_: Throwable) {
-            false
-        }
+        } ?: false
+    } catch (_: Throwable) {
+        false
     }
+}
 
-    private fun decryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
-        return try {
-            val input = ctx.contentResolver.openInputStream(file.uri) ?: return false
+private fun decryptFile(ctx: Context, password: String, file: DocumentFile): Boolean {
+    return try {
+        ctx.contentResolver.openInputStream(file.uri)?.use { input ->
             val text = input.bufferedReader().use { it.readText() }
-            // try decrypt; if fails - propagate false
             val dec = try { Secure.decrypt(password, text) } catch (_: Throwable) { return false }
-            val out = ctx.contentResolver.openOutputStream(file.uri, "wt") ?: return false
-            out.use { it.write(dec.toByteArray()) }
+            ctx.contentResolver.openOutputStream(file.uri, "wt")?.use { out ->
+                out.write(dec.toByteArray())
+            } ?: return false
             true
-        } catch (_: Throwable) {
-            false
+        } ?: false
+    } catch (_: Throwable) {
+        false
+    }
+}
+
+private fun encryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
+    var changed = 0
+    try {
+        for (child in dir.listFiles()) {
+            if (child.isDirectory) changed += encryptInDir(ctx, password, child)
+            else {
+                if (encryptFile(ctx, password, child)) changed++
+            }
         }
-    }
+    } catch (_: Throwable) { }
+    return changed
+}
 
-    private fun encryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
-        var changed = 0
-        try {
-            for (child in dir.listFiles()) {
-                if (child.isDirectory) changed += encryptInDir(ctx, password, child)
-                else {
-                    if (encryptFile(ctx, password, child)) changed++
-                }
+private fun decryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
+    var changed = 0
+    try {
+        for (child in dir.listFiles()) {
+            if (child.isDirectory) changed += decryptInDir(ctx, password, child)
+            else {
+                if (decryptFile(ctx, password, child)) changed++
             }
-        } catch (_: Throwable) { }
-        return changed
-    }
-
-    private fun decryptInDir(ctx: Context, password: String, dir: DocumentFile): Int {
-        var changed = 0
-        try {
-            for (child in dir.listFiles()) {
-                if (child.isDirectory) changed += decryptInDir(ctx, password, child)
-                else {
-                    if (decryptFile(ctx, password, child)) changed++
-                }
-            }
-        } catch (_: Throwable) { }
-        return changed
-    }
+        }
+    } catch (_: Throwable) { }
+    return changed
+}
 
     // -------------------------
 // Network helper functions (ping/dns/http/git-download)
