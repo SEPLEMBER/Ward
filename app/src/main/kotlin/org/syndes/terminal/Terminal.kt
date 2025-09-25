@@ -729,6 +729,53 @@ class Terminal {
                     input.bufferedReader().use { it.readText() }
                 }
 
+// -------------------------
+// Network commands: ping, dns, curl/fetch, gitclone
+// -------------------------
+"ping" -> {
+    if (args.isEmpty()) return "Usage: ping <host> [count]"
+    val host = args[0]
+    val count = args.getOrNull(1)?.toIntOrNull() ?: 4
+    // Try system ping first (more accurate), fallback to InetAddress.isReachable
+    try {
+        runSystemPing(host, count)
+    } catch (t: Throwable) {
+        runInetPing(host, count)
+    }
+}
+
+"dns" -> {
+    if (args.isEmpty()) return "Usage: dns <name>"
+    val name = args.joinToString(" ")
+    try {
+        dnsLookup(name)
+    } catch (t: Throwable) {
+        "DNS lookup failed: ${t.message ?: "unknown"}"
+    }
+}
+
+"curl", "fetch" -> {
+    if (args.isEmpty()) return "Usage: curl <url> (or fetch <url>)"
+    val url = args.joinToString(" ")
+    try {
+        // returns headers + preview of body (first N chars)
+        httpGet(url, 4096)
+    } catch (t: Throwable) {
+        "HTTP GET failed: ${t.message ?: "unknown"}"
+    }
+}
+
+"gitclone" -> {
+    if (args.isEmpty()) return "Usage: gitclone <repo-url> [branch]"
+    val repo = args[0]
+    val branch = args.getOrNull(1) ?: "master"
+    try {
+        gitCloneAsZip(ctx, repo, branch)
+    } catch (t: Throwable) {
+        "gitclone failed: ${t.message ?: "unknown"}"
+    }
+}
+                
                 "ln" -> {
                     if (args.size < 2) return "Error: ln <source> <link>"
                     val srcPath = args[0]
@@ -753,6 +800,8 @@ class Terminal {
                     val chars = text.length
                     "$lines $words $chars $filePath"
                 }
+
+                
 
                 "head" -> {
                     if (args.isEmpty()) return "Error: head <path> [n]"
@@ -1549,6 +1598,135 @@ private fun java.io.File.writeFromInputStream(ins: java.io.InputStream) {
         } catch (_: Throwable) { }
         return changed
     }
+
+    // -------------------------
+// Network helper functions (ping/dns/http/git-download)
+// -------------------------
+
+// Try to use system 'ping' utility (more exact output) - may fail if binary absent or arguments differ
+private fun runSystemPing(host: String, count: Int = 4): String {
+    try {
+        // "-c" - count, "-W" - timeout (seconds) per packet on many Androids (busybox/toybox may differ)
+        val timeoutSec = "2"
+        val cmd = listOf("ping", "-c", count.toString(), "-W", timeoutSec, host)
+        val pb = ProcessBuilder(cmd)
+        pb.redirectErrorStream(true)
+        val proc = pb.start()
+        val output = proc.inputStream.bufferedReader().use { it.readText() }
+        proc.waitFor()
+        return output.ifBlank { "Ping produced no output" }
+    } catch (t: Throwable) {
+        throw t
+    }
+}
+
+// Fallback: use InetAddress.isReachable repeatedly and summarise
+private fun runInetPing(host: String, count: Int = 4, timeoutMs: Int = 2000): String {
+    return try {
+        val addr = java.net.InetAddress.getByName(host)
+        val sb = StringBuilder()
+        sb.appendLine("Pinging ${addr.hostAddress} ($host) with $count attempts (fallback)")
+        var received = 0
+        for (i in 1..count) {
+            val start = System.currentTimeMillis()
+            val ok = try { addr.isReachable(timeoutMs) } catch (_: Throwable) { false }
+            val elapsed = System.currentTimeMillis() - start
+            sb.appendLine("Attempt $i: ${if (ok) "reply" else "timeout"} (${elapsed} ms)")
+            if (ok) received++
+        }
+        sb.appendLine("---")
+        sb.appendLine("Sent=$count, Received=$received, Lost=${count - received}")
+        sb.toString()
+    } catch (t: Throwable) {
+        "Inet ping failed: ${t.message}"
+    }
+}
+
+// DNS lookup helper
+private fun dnsLookup(name: String): String {
+    return try {
+        val addrs = java.net.InetAddress.getAllByName(name)
+        addrs.joinToString("\n") { "${it.hostAddress} (${it.hostName})" }
+    } catch (t: Throwable) {
+        throw t
+    }
+}
+
+// Simple HTTP GET: returns headers + preview of body (first maxBodyChars chars)
+private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
+    try {
+        val url = java.net.URL(urlStr)
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15_000
+            readTimeout = 15_000
+            instanceFollowRedirects = true
+        }
+        val code = conn.responseCode
+        val sb = StringBuilder()
+        sb.appendLine("HTTP $code ${conn.responseMessage}")
+        conn.headerFields.forEach { (k, v) ->
+            if (k != null) sb.appendLine("$k: ${v?.joinToString(";")}")
+        }
+        val inputStream = try { conn.inputStream } catch (_: Throwable) { conn.errorStream }
+        val body = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
+        val preview = if (body.length > maxBodyChars) body.substring(0, maxBodyChars) + "\n...[truncated]" else body
+        if (preview.isNotBlank()) {
+            sb.appendLine("\n--- body preview ---\n")
+            sb.append(preview)
+        } else {
+            sb.appendLine("\n(no body)")
+        }
+        conn.disconnect()
+        return sb.toString()
+    } catch (t: Throwable) {
+        throw t
+    }
+}
+
+// Download arbitrary URL to work dir (DocumentFile). Returns true on success.
+private fun downloadUrlToWork(ctx: Context, urlStr: String, filename: String): Boolean {
+    val root = getRootDir(ctx) ?: return false
+    val dest = root.createFile("application/octet-stream", filename) ?: return false
+    return try {
+        val url = java.net.URL(urlStr)
+        val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 30000
+            instanceFollowRedirects = true
+        }
+        conn.inputStream.use { ins ->
+            ctx.contentResolver.openOutputStream(dest.uri)?.use { out ->
+                ins.copyTo(out)
+            } ?: throw IllegalStateException("Cannot open output stream")
+        }
+        conn.disconnect()
+        true
+    } catch (t: Throwable) {
+        false
+    }
+}
+
+// Simple gitclone-as-zip for GitHub (or direct zip link). Downloads zip to work dir; does NOT unpack.
+private fun gitCloneAsZip(ctx: Context, repoUrl: String, branch: String?): String {
+    return try {
+        val zipUrl = when {
+            repoUrl.contains("github.com") -> {
+                // example: https://github.com/user/repo -> https://github.com/user/repo/archive/refs/heads/<branch>.zip
+                repoUrl.trimEnd('/').let { "$it/archive/refs/heads/${branch ?: "master"}.zip" }
+            }
+            repoUrl.endsWith(".zip") -> repoUrl
+            else -> return "Unsupported repo host for automatic zip download (only GitHub or direct zip URLs supported)"
+        }
+        val safeName = repoUrl.trimEnd('/').substringAfterLast('/') + "-" + (branch ?: "master") + ".zip"
+        val ok = downloadUrlToWork(ctx, zipUrl, safeName)
+        if (ok) "Downloaded $safeName to work dir"
+        else "Download failed (check network/URL)"
+    } catch (t: Throwable) {
+        "gitclone failed: ${t.message ?: "unknown"}"
+    }
+}
 
     // ---------------------------
     // Existing helper methods
