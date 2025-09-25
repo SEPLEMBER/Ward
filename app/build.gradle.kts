@@ -50,6 +50,9 @@ dependencies {
     implementation(libs.appcompat)
     implementation(libs.documentfile)
 
+    implementation(libs.coroutines.core)
+    implementation(libs.coroutines.android)
+
     testImplementation(libs.junit)
     androidTestImplementation(libs.ext.junit)
     androidTestImplementation(libs.espresso.core)
