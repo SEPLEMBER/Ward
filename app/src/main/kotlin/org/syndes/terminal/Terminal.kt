@@ -1981,3 +1981,4 @@ private fun gitCloneAsZip(ctx: Context, repoUrl: String, branch: String?): Strin
         // not found
         return null
     }
+}
