@@ -434,6 +434,35 @@ class Terminal {
     "Info: renamed $changed file(s)"
 }
 
+// rename filenames in directory (substring replacement in filenames)
+                "rename" -> {
+                    if (args.size < 3) return "Usage: rename <old> <new> <dir>"
+                    val old = args[0]
+                    val new = args[1]
+                    val path = args.drop(2).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val dir = parent.findFile(name) ?: return "Error: no such directory '$path'"
+                    if (!dir.isDirectory) return "Error: target is not a directory"
+                    var counter = 1
+                    var changed = 0
+                    for (child in dir.listFiles()) {
+                        val nm = child.name ?: continue
+                        if (nm.contains(old)) {
+                            val repl = if (new.contains("{}")) new.replace("{}", counter.toString()) else nm.replace(old, new)
+                            // try to rename: SAF doesn't have rename API everywhere; create new file and copy
+                            val mime = child.type ?: "application/octet-stream"
+                            val newFile = dir.createFile(mime, repl)
+                            if (newFile != null) {
+                                copyFile(ctx, child.uri, newFile.uri)
+                                child.delete()
+                                changed++
+                                counter++
+                            }
+                        }
+                    }
+                    "Info: renamed $changed file(s)"
+                }
+
 "trash" -> {
     if (args.isEmpty()) return "Usage: trash <path>"
     val path = args.joinToString(" ")
@@ -834,6 +863,24 @@ class Terminal {
                     }
                     "Equal"
                 }
+
+                // replace old->new in file or recursively in directory
+                "replace" -> {
+                    if (args.size < 3) return "Usage: replace <old> <new> <path>"
+                    val old = args[0]
+                    val new = args[1]
+                    val path = args.drop(2).joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+                    val changed = if (target.isDirectory) {
+                        replaceInDirRecursive(ctx, target, old, new)
+                    } else {
+                        val ok = replaceInFile(ctx, target, old, new)
+                        if (ok) 1 else 0
+                    }
+                    "Info: replaced in $changed file(s)"
+                }
+
 
                 // diff: show simple differences with line numbers
                 "diff" -> {
