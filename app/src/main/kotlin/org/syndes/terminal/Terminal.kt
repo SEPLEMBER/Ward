@@ -661,74 +661,6 @@ class Terminal {
                     }
                 }
 
-                "pwd" -> {
-                    val current = getCurrentDir(ctx) ?: return "Error: work folder not set."
-                    buildPath(current)
-                }
-
-                "cp" -> {
-                    if (args.size < 2) return "Error: cp <source> <dest>"
-                    val srcPath = args[0]
-                    val destPath = args[1]
-                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
-                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
-                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
-                    val dest = destParent.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
-                    copyFile(ctx, src.uri, dest.uri)
-                    "Info: copied $srcPath to $destPath"
-                }
-
-                "mv" -> {
-                    if (args.size < 2) return "Error: mv <source> <dest>"
-                    val srcPath = args[0]
-                    val destPath = args[1]
-                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
-                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
-                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
-                    val dest = destParent.createFile(src.type ?: "*/*", destName) ?: return "Error: cannot create dest"
-                    copyFile(ctx, src.uri, dest.uri)
-                    src.delete()
-                    "Info: moved $srcPath to $destPath"
-                }
-
-                "rm" -> {
-                    if (args.isEmpty()) return "Error: rm [-r] <path>"
-                    val hasR = args.contains("-r")
-                    val targetPath = args.firstOrNull { it != "-r" } ?: return "Error: specify path"
-                    val (parent, targetName) = resolvePath(ctx, targetPath) ?: return "Error: invalid path"
-                    val target = parent.findFile(targetName) ?: return "Error: no such file '$targetPath'"
-                    if (target.isDirectory && !hasR) {
-                        if (target.listFiles().isNotEmpty()) return "Error: directory not empty, use -r"
-                    }
-                    recursiveDelete(target)
-                    "Info: deleted $targetPath"
-                }
-
-                "mkdir" -> {
-                    if (args.isEmpty()) return "Error: mkdir <path>"
-                    val dirPath = args[0]
-                    val (parent, dirName) = resolvePath(ctx, dirPath, createDirs = true) ?: return "Error: invalid path"
-                    parent.createDirectory(dirName) ?: return "Error: cannot create directory"
-                    "Info: created directory $dirPath"
-                }
-
-                "touch" -> {
-                    if (args.isEmpty()) return "Error: touch <path>"
-                    val filePath = args[0]
-                    val (parent, fileName) = resolvePath(ctx, filePath, createDirs = true) ?: return "Error: invalid path"
-                    parent.createFile("text/plain", fileName) ?: return "Error: cannot create file"
-                    "Info: created file $filePath"
-                }
-
-                "cat" -> {
-                    if (args.isEmpty()) return "Error: cat <path>"
-                    val filePath = args[0]
-                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
-                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
-                    val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
-                    input.bufferedReader().use { it.readText() }
-                }
-
 // -------------------------
 // Network commands: ping, dns, curl/fetch, gitclone
 // -------------------------
@@ -776,7 +708,7 @@ class Terminal {
     }
 }
                 
-                "ln" -> {
+                                "ln" -> {
                     if (args.size < 2) return "Error: ln <source> <link>"
                     val srcPath = args[0]
                     val linkPath = args[1]
@@ -800,8 +732,6 @@ class Terminal {
                     val chars = text.length
                     "$lines $words $chars $filePath"
                 }
-
-                
 
                 "head" -> {
                     if (args.isEmpty()) return "Error: head <path> [n]"
@@ -899,80 +829,196 @@ class Terminal {
                     if (sb.isEmpty()) "No differences" else sb.toString()
                 }
 
-                // replace old->new in file or recursively in directory
-                "replace" -> {
-                    if (args.size < 3) return "Usage: replace <old> <new> <path>"
-                    val old = args[0]
-                    val new = args[1]
-                    val path = args.drop(2).joinToString(" ")
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
-                    val changed = if (target.isDirectory) {
-                        replaceInDirRecursive(ctx, target, old, new)
-                    } else {
-                        val ok = replaceInFile(ctx, target, old, new)
-                        if (ok) 1 else 0
-                    }
-                    "Info: replaced in $changed file(s)"
-                }
+                // --------- CP / MV (с рекурсией и корректным поведением для директорий) ----------
+                "cp" -> {
+                    if (args.size < 2) return "Error: cp <source> <dest>"
+                    val srcPath = args[0]
+                    val destPath = args[1]
+                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
+                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
 
-                // rename filenames in directory (substring replacement in filenames)
-                "rename" -> {
-                    if (args.size < 3) return "Usage: rename <old> <new> <dir>"
-                    val old = args[0]
-                    val new = args[1]
-                    val path = args.drop(2).joinToString(" ")
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val dir = parent.findFile(name) ?: return "Error: no such directory '$path'"
-                    if (!dir.isDirectory) return "Error: target is not a directory"
-                    var counter = 1
-                    var changed = 0
-                    for (child in dir.listFiles()) {
-                        val nm = child.name ?: continue
-                        if (nm.contains(old)) {
-                            val repl = if (new.contains("{}")) new.replace("{}", counter.toString()) else nm.replace(old, new)
-                            // try to rename: SAF doesn't have rename API everywhere; create new file and copy
-                            val mime = child.type ?: "application/octet-stream"
-                            val newFile = dir.createFile(mime, repl)
-                            if (newFile != null) {
-                                copyFile(ctx, child.uri, newFile.uri)
-                                child.delete()
-                                changed++
-                                counter++
+                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
+                    val destEntry = if (destName.isEmpty()) null else destParent.findFile(destName)
+
+                    // helper: recursively copy src into targetDir (if src is dir, create subdir with same name)
+                    fun copyRecursive(srcDoc: DocumentFile, targetDir: DocumentFile): Int {
+                        var count = 0
+                        if (srcDoc.isDirectory) {
+                            // take or create subdir
+                            val dirName = srcDoc.name ?: "dir"
+                            val sub = targetDir.findFile(dirName)?.takeIf { it.isDirectory } ?: targetDir.createDirectory(dirName)
+                                ?: return 0
+                            for (child in srcDoc.listFiles()) {
+                                count += copyRecursive(child, sub)
+                            }
+                        } else {
+                            val mime = srcDoc.type ?: "application/octet-stream"
+                            // if file with same name exists, create a new unique name
+                            val fname = srcDoc.name ?: "file"
+                            val newFile = targetDir.createFile(mime, fname) ?: return count
+                            copyFile(ctx, srcDoc.uri, newFile.uri)
+                            count++
+                        }
+                        return count
+                    }
+
+                    return try {
+                        if (src.isDirectory) {
+                            // determine target directory to copy INTO
+                            val targetDir = when {
+                                destEntry != null && destEntry.isDirectory -> destEntry
+                                destEntry != null && !destEntry.isDirectory -> return "Error: destination is a file"
+                                destName.isEmpty() -> {
+                                    // destParent is the directory to put a subdir with src.name
+                                    destParent
+                                }
+                                else -> {
+                                    // destEntry doesn't exist -> create directory with that name
+                                    destParent.createDirectory(destName) ?: return "Error: cannot create destination directory"
+                                }
+                            }
+                            // if targetDir refers to parent where we should create subdir with src.name:
+                            val finalDir = if (destEntry != null && destEntry.isDirectory) {
+                                // copy contents inside destEntry/ (so result is destEntry/srcName/...)
+                                destEntry
+                            } else if (destName.isEmpty()) {
+                                // create subdir with src.name in destParent
+                                destParent.findFile(src.name ?: srcName)?.takeIf { it.isDirectory } ?: destParent.createDirectory(src.name ?: srcName)
+                                    ?: return "Error: cannot create destination directory"
+                            } else {
+                                // destParent.createDirectory(destName) already created above -> find it
+                                destParent.findFile(destName) ?: return "Error: cannot locate created directory"
+                            }
+
+                            val copied = copyRecursive(src, finalDir)
+                            "Info: copied $copied item(s) from $srcPath to ${buildPath(finalDir)}"
+                        } else {
+                            // src is file
+                            if (destEntry != null) {
+                                if (destEntry.isDirectory) {
+                                    // copy INTO dest directory with same filename
+                                    val newFile = destEntry.createFile(src.type ?: "application/octet-stream", src.name ?: srcName)
+                                        ?: return "Error: cannot create destination file"
+                                    copyFile(ctx, src.uri, newFile.uri)
+                                    "Info: copied file $srcPath to ${buildPath(destEntry)}/${newFile.name}"
+                                } else {
+                                    // destEntry is file -> overwrite
+                                    copyFile(ctx, src.uri, destEntry.uri)
+                                    "Info: copied file $srcPath over $destPath"
+                                }
+                            } else {
+                                // destEntry doesn't exist: destName may be empty (means destParent is target dir) or a filename
+                                val finalName = if (destName.isEmpty()) src.name ?: srcName else destName
+                                val newFile = destParent.createFile(src.type ?: "application/octet-stream", finalName) ?: return "Error: cannot create dest"
+                                copyFile(ctx, src.uri, newFile.uri)
+                                "Info: copied file $srcPath to ${buildPath(destParent)}/${newFile.name}"
                             }
                         }
+                    } catch (t: Throwable) {
+                        "Error: cp failed: ${t.message ?: "unknown"}"
                     }
-                    "Info: renamed $changed file(s)"
                 }
 
-                // encrypt / decrypt (text files only)
-                "encrypt" -> {
-                    if (args.size < 2) return "Usage: encrypt <password> <path>"
-                    val password = args[0]
-                    val path = args.drop(1).joinToString(" ")
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
-                    val processed = if (target.isDirectory) {
-                        encryptInDir(ctx, password, target)
-                    } else {
-                        if (encryptFile(ctx, password, target)) 1 else 0
+                "mv" -> {
+                    if (args.size < 2) return "Error: mv <source> <dest>"
+                    val srcPath = args[0]
+                    val destPath = args[1]
+                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source path"
+                    val src = srcParent.findFile(srcName) ?: return "Error: no source '$srcPath'"
+
+                    val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
+                    val destEntry = if (destName.isEmpty()) null else destParent.findFile(destName)
+
+                    // reuse cp logic: copy then delete original
+                    fun copyRecursive(srcDoc: DocumentFile, targetDir: DocumentFile): Int {
+                        var count = 0
+                        if (srcDoc.isDirectory) {
+                            val dirName = srcDoc.name ?: "dir"
+                            val sub = targetDir.findFile(dirName)?.takeIf { it.isDirectory } ?: targetDir.createDirectory(dirName)
+                                ?: return 0
+                            for (child in srcDoc.listFiles()) {
+                                count += copyRecursive(child, sub)
+                            }
+                        } else {
+                            val mime = srcDoc.type ?: "application/octet-stream"
+                            val fname = srcDoc.name ?: "file"
+                            val newFile = targetDir.createFile(mime, fname) ?: return count
+                            copyFile(ctx, srcDoc.uri, newFile.uri)
+                            count++
+                        }
+                        return count
                     }
-                    "Info: encrypted $processed file(s)"
+
+                    return try {
+                        var movedCount = 0
+                        if (src.isDirectory) {
+                            val finalDir = when {
+                                destEntry != null && destEntry.isDirectory -> destEntry
+                                destEntry != null && !destEntry.isDirectory -> return "Error: destination is a file"
+                                destName.isEmpty() -> destParent.findFile(src.name ?: srcName)?.takeIf { it.isDirectory } ?: destParent.createDirectory(src.name ?: srcName)
+                                    ?: return "Error: cannot create destination directory"
+                                else -> destParent.createDirectory(destName) ?: return "Error: cannot create destination directory"
+                            }
+                            movedCount = copyRecursive(src, finalDir)
+                            // delete original directory only if copy succeeded with >0 items (or even if zero? we'll attempt deletion)
+                            recursiveDelete(src)
+                            "Info: moved $movedCount item(s) from $srcPath to ${buildPath(finalDir)}"
+                        } else {
+                            // file
+                            val destFile: DocumentFile? = when {
+                                destEntry != null && destEntry.isDirectory -> destEntry.createFile(src.type ?: "application/octet-stream", src.name ?: srcName)
+                                destEntry != null && !destEntry.isDirectory -> destEntry // overwrite
+                                destName.isEmpty() -> destParent.createFile(src.type ?: "application/octet-stream", src.name ?: srcName)
+                                else -> destParent.createFile(src.type ?: "application/octet-stream", destName)
+                            }
+                            if (destFile == null) return "Error: cannot create destination file"
+                            copyFile(ctx, src.uri, destFile.uri)
+                            src.delete()
+                            "Info: moved file $srcPath to ${buildPath(destParent)}/${destFile.name}"
+                        }
+                    } catch (t: Throwable) {
+                        "Error: mv failed: ${t.message ?: "unknown"}"
+                    }
                 }
 
-                "decrypt" -> {
-                    if (args.size < 2) return "Usage: decrypt <password> <path>"
-                    val password = args[0]
-                    val path = args.drop(1).joinToString(" ")
-                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
-                    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
-                    val processed = if (target.isDirectory) {
-                        decryptInDir(ctx, password, target)
-                    } else {
-                        if (decryptFile(ctx, password, target)) 1 else 0
+                "rm" -> {
+                    if (args.isEmpty()) return "Error: rm [-r] <path>"
+                    val hasR = args.contains("-r")
+                    val targetPath = args.firstOrNull { it != "-r" } ?: return "Error: specify path"
+                    val (parent, targetName) = resolvePath(ctx, targetPath) ?: return "Error: invalid path"
+                    val target = parent.findFile(targetName) ?: return "Error: no such file '$targetPath'"
+                    if (target.isDirectory && !hasR) {
+                        if (target.listFiles().isNotEmpty()) return "Error: directory not empty, use -r"
                     }
-                    "Info: decrypted $processed file(s)"
+                    recursiveDelete(target)
+                    "Info: deleted $targetPath"
                 }
+
+                "mkdir" -> {
+                    if (args.isEmpty()) return "Error: mkdir <path>"
+                    val dirPath = args[0]
+                    val (parent, dirName) = resolvePath(ctx, dirPath, createDirs = true) ?: return "Error: invalid path"
+                    parent.createDirectory(dirName) ?: return "Error: cannot create directory"
+                    "Info: created directory $dirPath"
+                }
+
+                "touch" -> {
+                    if (args.isEmpty()) return "Error: touch <path>"
+                    val filePath = args[0]
+                    val (parent, fileName) = resolvePath(ctx, filePath, createDirs = true) ?: return "Error: invalid path"
+                    parent.createFile("text/plain", fileName) ?: return "Error: cannot create file"
+                    "Info: created file $filePath"
+                }
+
+                "cat" -> {
+                    if (args.isEmpty()) return "Error: cat <path>"
+                    val filePath = args[0]
+                    val (parent, fileName) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(fileName) ?: return "Error: no such file '$filePath'"
+                    val input = ctx.contentResolver.openInputStream(file.uri) ?: return "Error: cannot open file"
+                    input.bufferedReader().use { it.readText() }
+                }
+
 
                 "alias" -> {
                     if (args.isEmpty()) return "Usage: alias <name>=<command> | alias list | alias run <name>"
