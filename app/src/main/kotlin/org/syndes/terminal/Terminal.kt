@@ -611,10 +611,12 @@ class Terminal {
     val apk = parent.findFile(name) ?: return "Error: apk not found"
     // copy to cache
     val tmp = try {
-        val cf = java.io.File(ctx.cacheDir, "syndes_tmp_${System.currentTimeMillis()}.apk")
-        ctx.contentResolver.openInputStream(apk.uri)?.use { ins -> cf.outputStream().use { it.copyFrom(ins) } }
-        cf
-    } catch (t: Throwable) { null }
+    val cf = java.io.File(ctx.cacheDir, "syndes_tmp_${System.currentTimeMillis()}.apk")
+    ctx.contentResolver.openInputStream(apk.uri)?.use { ins ->
+        cf.outputStream().use { out -> ins.copyTo(out) }
+    }
+    cf
+} catch (t: Throwable) { null }
     if (tmp == null) return "Error: cannot copy apk to cache"
     try {
         val pm = ctx.packageManager
@@ -1979,22 +1981,3 @@ private fun gitCloneAsZip(ctx: Context, repoUrl: String, branch: String?): Strin
         // not found
         return null
     }
-
-    // ---------------------------
-    // Small utilities
-    // ---------------------------
-    private fun humanReadableBytes(b: Long): String {
-        val abs = if (b == Long.MIN_VALUE) Long.MAX_VALUE else kotlin.math.abs(b)
-        if (abs < 1024) return "$b B"
-        val value = abs.toDouble()
-        val units = arrayOf("B", "KB", "MB", "GB", "TB")
-        var idx = 0
-        var v = value
-        while (v >= 1024 && idx < units.size - 1) {
-            v /= 1024.0
-            idx++
-        }
-        val sign = if (b < 0) "-" else ""
-        return String.format("%s%.2f %s", sign, v, units[idx])
-    }
-}
