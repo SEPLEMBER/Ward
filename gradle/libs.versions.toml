@@ -7,6 +7,7 @@ appcompat = "1.6.1"
 kotlin = "1.9.0"
 coreKtx = "1.13.1"
 documentfile = "1.0.1"
+coroutines = "1.7.3"
 
 [libraries]
 junit = { group = "junit", name = "junit", version.ref = "junit" }
@@ -15,6 +16,8 @@ espresso-core = { group = "androidx.test.espresso", name = "espresso-core", vers
 appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
 core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 documentfile = { group = "androidx.documentfile", name = "documentfile", version.ref = "documentfile" }
+coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-core", version.ref = "coroutines" }
+coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }
