@@ -131,7 +131,7 @@ class MainActivity : AppCompatActivity() {
     super.onResume()
     // register receiver for watchdog results (service broadcasts)
     try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { // API 26
             registerReceiver(
                 watchdogReceiver,
                 IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"),
