@@ -18,8 +18,7 @@
         android:textSize="14sp"
         android:padding="8dp"
         android:background="@android:color/transparent"
-        android:scrollbars="vertical"
-        android:textIsSelectable="true" />
+        android:scrollbars="vertical" />
 
     <!-- Progress row: hidden by default -->
     <LinearLayout
