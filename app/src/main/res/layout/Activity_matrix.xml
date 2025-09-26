@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/matrixRoot"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000"
+    android:fitsSystemWindows="true">
+
+    <!-- Custom view: full-screen matrix -->
+    <org.syndes.terminal.MatrixView
+        android:id="@+id/matrixView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- Close button (small), top-left corner -->
+    <ImageButton
+        android:id="@+id/matrixCloseBtn"
+        android:layout_width="44dp"
+        android:layout_height="44dp"
+        android:layout_margin="8dp"
+        android:background="@android:color/transparent"
+        android:scaleType="centerInside"
+        android:src="@android:drawable/ic_menu_close_clear_cancel"
+        android:tint="#BBFFFFFF"
+        android:contentDescription="@string/close" />
+
+</FrameLayout>
