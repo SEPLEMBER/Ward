@@ -10,6 +10,7 @@ import android.text.style.ForegroundColorSpan
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
+import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -49,7 +50,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN)
+
+        // используем ADJUST_RESIZE — при появлении клавиатуры layout будет уменьшаться,
+        // это предотвращает «уход» верхней части TextView за пределы экрана
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+
         setContentView(R.layout.activity_main)
 
         terminalOutput = findViewById(R.id.terminalOutput)
@@ -72,6 +77,10 @@ class MainActivity : AppCompatActivity() {
         sendButton.setTextColor(embeddedYellow)
         sendButton.setBackgroundColor(Color.TRANSPARENT)
 
+        // Сделаем inputField явно фокусируемым в touch-mode (предотвращает потерю ввода)
+        inputField.isFocusable = true
+        inputField.isFocusableInTouchMode = true
+
         // Обработчики
         sendButton.setOnClickListener { sendCommand() }
 
@@ -86,12 +95,24 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        inputField.requestFocus()
+        // Если пользователь тапает по выводу — переводим фокус на поле ввода и показываем клавиатуру
+        terminalOutput.setOnClickListener {
+            focusAndShowKeyboard()
+        }
+
+        // По умолчанию даём фокус полю и пытаемся показать клавиатуру (параметр устройства/IME может мешать)
+        inputField.post {
+            inputField.requestFocus()
+        }
     }
 
     private fun sendCommand() {
         val command = inputField.text.toString().trim()
-        if (command.isEmpty()) return
+        if (command.isEmpty()) {
+            // если поле пустое - просто убедимся, что клавиатура видна и поле сфокусировано
+            focusAndShowKeyboard()
+            return
+        }
 
         val inputColor = ContextCompat.getColor(this, R.color.color_command)
         val errorColor = ContextCompat.getColor(this, R.color.color_error)
@@ -112,7 +133,7 @@ class MainActivity : AppCompatActivity() {
                 terminalOutput.append(colorize("Error: command execution failed\n", errorColor))
             }
             inputField.text.clear()
-            inputField.requestFocus()
+            focusAndShowKeyboard()
             return
         }
 
@@ -151,7 +172,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         inputField.text.clear()
-        inputField.requestFocus()
+        focusAndShowKeyboard()
     }
 
     private fun handleResultAndScroll(
@@ -177,9 +198,19 @@ class MainActivity : AppCompatActivity() {
         val autoScroll = prefs.getBoolean("scroll_behavior", true)
         if (autoScroll) scrollToBottom()
 
+        // подстраховка: гарантируем, что поле остаётся в фокусе и клавиатура видима
         inputField.post {
             inputField.requestFocus()
-            try { inputField.setSelection(0) } catch (_: Throwable) {}
+        }
+    }
+
+    private fun focusAndShowKeyboard() {
+        inputField.post {
+            inputField.requestFocus()
+            try {
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.showSoftInput(inputField, InputMethodManager.SHOW_IMPLICIT)
+            } catch (_: Throwable) { /* ignore */ }
         }
     }
 
