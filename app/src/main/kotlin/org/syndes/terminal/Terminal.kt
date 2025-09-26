@@ -27,9 +27,6 @@ import java.util.zip.ZipOutputStream
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
 
 class Terminal {
 
@@ -1101,30 +1098,6 @@ class Terminal {
     }
 }
 
-// watch: periodically run command
-"watch" -> {
-    if (args.size < 2) return "Usage: watch [-n <seconds>] <command>"
-    var interval = 2
-    var argIndex = 0
-    if (args[argIndex] == "-n") {
-        argIndex++
-        interval = args.getOrNull(argIndex)?.toIntOrNull() ?: return "Error: invalid interval"
-        argIndex++
-    }
-    val command = args.drop(argIndex).joinToString(" ")
-    if (command.isEmpty()) return "Usage: watch [-n <seconds>] <command>"
-    if (ctx !is MainActivity) return "Error: watch requires Activity context"
-    ctx.lifecycleScope.launch {
-        while (isActive) {
-            val result = execute(command, ctx) ?: ""
-            ctx.terminalOutput.text = ""
-            ctx.terminalOutput.append(result)
-            delay(interval * 1000L)
-        }
-    }
-    "Info: watching '$command' every $interval s (tap output to stop if needed)"
-}
-
 // logcat: view system logs
 "logcat" -> {
     var tag: String? = null
@@ -1150,8 +1123,13 @@ class Terminal {
         argIndex++
     }
     val cmd = mutableListOf("logcat", "-d", "-t", lines.toString())
-    if (tag != null) cmd.addAll(listOf("-s", tag))
-    if (level != null && level in listOf("V", "D", "I", "W", "E")) cmd.addAll(listOf("-p", level))
+    if (tag != null && level != null) {
+        cmd.add("$tag:$level")
+    } else if (tag != null) {
+        cmd.addAll(listOf("-s", tag))
+    } else if (level != null && level in listOf("V", "D", "I", "W", "E")) {
+        cmd.add("*:$level")
+    }
     try {
         val pb = ProcessBuilder(cmd)
         pb.redirectErrorStream(true)
