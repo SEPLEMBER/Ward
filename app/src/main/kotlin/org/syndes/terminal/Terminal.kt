@@ -874,48 +874,26 @@ class Terminal {
                     "Info: replaced in $changed file(s)"
                 }
 
-// compare files line-by-line or binary
-"cmp" -> {
-    if (args.size < 2) return "Usage: cmp [-b] [-i] [-n <limit>] <file1> <file2>"
-    var binary = false
-    var ignoreCase = false
-    var limit: Long = Long.MAX_VALUE
-    var argIndex = 0
-    while (argIndex < args.size && args[argIndex].startsWith("-")) {
-        when (args[argIndex]) {
-            "-b" -> binary = true
-            "-i" -> ignoreCase = true
-            "-n" -> {
-                argIndex++
-                limit = args.getOrNull(argIndex)?.toLongOrNull() ?: return "Error: invalid limit"
-            }
-            else -> return "Error: unknown option ${args[argIndex]}"
-        }
-        argIndex++
-    }
-    if (args.size - argIndex < 2) return "Usage: cmp [-b] [-i] [-n <limit>] <file1> <file2>"
-    val f1path = args[argIndex]; val f2path = args[argIndex + 1]
-    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
-    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
-    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
-    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
-    return if (binary) {
-        compareBinary(ctx, f1, f2, limit = limit)
-    } else {
-        val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
-        val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
-        val maxLines = min(max(lines1.size, lines2.size), (limit / 10).toInt().coerceAtLeast(1)) // approximate line limit
-        for (i in 0 until maxLines) {
-            val a = lines1.getOrNull(i)
-            val b = lines2.getOrNull(i)
-            val eq = if (ignoreCase) a.equals(b, ignoreCase = true) else a == b
-            if (!eq) {
-                return "Differ at line ${i+1}:\n< ${a ?: "<no line>"}\n> ${b ?: "<no line>"}"
-            }
-        }
-        "Equal"
-    }
-}
+// compare files line-by-line
+                "cmp" -> {
+                    if (args.size < 2) return "Usage: cmp <file1> <file2>"
+                    val f1path = args[0]; val f2path = args[1]
+                    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
+                    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
+                    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
+                    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
+                    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
+                    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
+                    val maxLines = max(lines1.size, lines2.size)
+                    for (i in 0 until maxLines) {
+                        val a = lines1.getOrNull(i)
+                        val b = lines2.getOrNull(i)
+                        if (a != b) {
+                            return "Differ at line ${i+1}:\n< ${a ?: "<no line>"}\n> ${b ?: "<no line>"}"
+                        }
+                    }
+                    "Equal"
+                }
 
 // diff: show simple differences with line numbers
 "diff" -> {
