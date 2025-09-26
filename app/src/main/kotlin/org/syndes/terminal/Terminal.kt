@@ -313,21 +313,16 @@ class Terminal {
                     }
                 }
 
-"launch" -> {
-    if (args.isEmpty()) return "Usage: launch <app name or package>"
-    val target = args.joinToString(" ")
-    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target)
-    if (pkg == null) return "Error: app not found: $target"
-    val li = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: return "Error: no launch intent for $pkg"
-    if (ctx !is Activity) li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    try {
-        ctx.startActivity(li)
-        "Info: launching $pkg"
-    } catch (e: Exception) {
-        Log.e("Terminal", "Failed to launch $pkg: ${e.message}")
-        "Error: failed to launch $pkg: ${e.message}"
-    }
-}
+                "launch" -> {
+                    if (args.isEmpty()) return "Usage: launch <app name or package>"
+                    val target = args.joinToString(" ")
+                    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target)
+                    if (pkg == null) return "Error: app not found: $target"
+                    val li = ctx.packageManager.getLaunchIntentForPackage(pkg) ?: return "Error: no launch intent for $pkg"
+                    if (ctx !is Activity) li.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(li)
+                    "Info: launching $pkg"
+                }
 
                 "history" -> {
                     if (history.isEmpty()) "(no history)"
