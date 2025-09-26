@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity() {
     private val heavyCommands = setOf(
         "rm", "cp", "mv", "replace", "encrypt", "decrypt", "cmp", "diff",
         "rename", "backup", "snapshot", "trash", "cleartrash",
-        "sha256", "md5"
+        "sha256", "md5", "delete all y"
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
