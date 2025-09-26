@@ -21,7 +21,7 @@
         android:background="@android:color/transparent"
         android:scaleType="centerInside"
         android:src="@android:drawable/ic_menu_close_clear_cancel"
-        android:tint="#BBFFFFFF"
+        app:tint="#BBFFFFFF"
         android:contentDescription="@string/close" />
 
 </FrameLayout>
