@@ -150,13 +150,6 @@ override fun onPause() {
     } catch (_: Exception) { /* ignore */ }
 }
 
-    override fun onPause() {
-        super.onPause()
-        try {
-            unregisterReceiver(watchdogReceiver)
-        } catch (_: Exception) { /* ignore */ }
-    }
-
     private fun sendCommand() {
         val command = inputField.text.toString().trim()
         if (command.isEmpty()) {
