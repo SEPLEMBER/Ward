@@ -127,7 +127,7 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-override fun onResume() {
+ override fun onResume() {
     super.onResume()
     // register receiver for watchdog results (service broadcasts)
     try {
@@ -140,6 +140,13 @@ override fun onResume() {
         } else {
             registerReceiver(watchdogReceiver, IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"))
         }
+    } catch (_: Exception) { /* ignore */ }
+}
+
+override fun onPause() {
+    super.onPause()
+    try {
+        unregisterReceiver(watchdogReceiver)
     } catch (_: Exception) { /* ignore */ }
 }
 
