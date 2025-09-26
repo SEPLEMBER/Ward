@@ -122,6 +122,100 @@ class MainActivity : AppCompatActivity() {
 
         terminalOutput.append(colorize("\n> $command\n", inputColor))
 
+        // ---------------------------
+        // watchdog: schedule a command to be executed after delay
+        // Usage: watchdog 15s <command...>   or watchdog 5m <command...> or watchdog 2h <command...>
+        // ---------------------------
+        if (command.startsWith("watchdog", ignoreCase = true)) {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 3) {
+                terminalOutput.append(colorize("Usage: watchdog <duration> <command...> e.g. watchdog 5m replace old new logs\n", errorColor))
+                inputField.text.clear()
+                focusAndShowKeyboard()
+                return
+            }
+
+            val durToken = parts[1]
+            val targetCmd = parts.drop(2).joinToString(" ")
+            val durSec = parseDurationToSeconds(durToken)
+            if (durSec <= 0L) {
+                terminalOutput.append(colorize("Error: invalid duration '$durToken'\n", errorColor))
+                inputField.text.clear()
+                focusAndShowKeyboard()
+                return
+            }
+
+            // schedule coroutine in lifecycleScope
+            lifecycleScope.launch {
+                try {
+                    // show countdown using progressRow/progressText
+                    progressRow.visibility = TextView.VISIBLE
+                    progressBar.isIndeterminate = true
+                    var remaining = durSec
+
+                    fun pretty(sec: Long): String {
+                        val h = sec / 3600
+                        val m = (sec % 3600) / 60
+                        val s = sec % 60
+                        return if (h > 0) String.format("%dh %02dm %02ds", h, m, s)
+                        else if (m > 0) String.format("%02dm %02ds", m, s)
+                        else String.format("%02ds", s)
+                    }
+
+                    // initial display
+                    progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+
+                    // coarse tick: per-minute if >=60s, switch to per-second when <60s
+                    while (remaining > 0 && isActive) {
+                        if (remaining >= 60L) {
+                            val step = 60L
+                            // Wait minute by minute but be responsive to cancellation
+                            var slept = 0L
+                            while (slept < 60_000L && isActive) {
+                                delay(1000L)
+                                slept += 1000L
+                                // no UI update here; we'll update after the minute block
+                            }
+                            remaining -= step
+                            if (remaining < 0L) remaining = 0L
+                            progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+                        } else {
+                            // per-second countdown
+                            while (remaining > 0 && isActive) {
+                                delay(1000L)
+                                remaining -= 1L
+                                if (remaining < 0L) remaining = 0L
+                                progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+                            }
+                        }
+                    }
+
+                    // final moment
+                    progressText.text = "Watchdog: executing \"$targetCmd\" now..."
+                    delay(250)
+
+                    // run the command as if user input it: set inputField and call sendCommand() on main
+                    withContext(Dispatchers.Main) {
+                        inputField.setText(targetCmd)
+                        // call sendCommand() to reuse all logic
+                        sendCommand()
+                    }
+                } catch (t: Throwable) {
+                    terminalOutput.append(colorize("Error: watchdog failed: ${t.message}\n", errorColor))
+                } finally {
+                    // cleanup UI
+                    progressRow.visibility = TextView.GONE
+                    progressText.text = ""
+                }
+            }
+
+            // acknowledge scheduling
+            terminalOutput.append(colorize("Watchdog scheduled: \"$targetCmd\" in $durToken\n", infoColor))
+            inputField.text.clear()
+            focusAndShowKeyboard()
+            return
+        }
+
         if (command.equals("clear", ignoreCase = true)) {
             terminalOutput.text = ""
             try {
@@ -160,7 +254,14 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 hideProgress()
-                handleResultAndScroll(command, result, defaultColor, infoColor, errorColor, systemYellow)
+                handleResultAndScroll(
+                    command,
+                    result,
+                    defaultColor = ContextCompat.getColor(this@MainActivity, R.color.terminal_text),
+                    infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info),
+                    errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error),
+                    systemYellow = Color.parseColor("#FFD54F")
+                )
             }
         } else {
             val result: String? = try {
@@ -237,6 +338,20 @@ class MainActivity : AppCompatActivity() {
         progressJob?.cancel()
         progressJob = null
         progressRow.visibility = TextView.GONE
+    }
+
+    // Parse duration token like "15s", "5m", "2h" or plain number (seconds).
+    private fun parseDurationToSeconds(tok: String): Long {
+        if (tok.isEmpty()) return 0L
+        val lower = tok.lowercase().trim()
+        return try {
+            when {
+                lower.endsWith("s") && lower.length > 1 -> lower.dropLast(1).toLongOrNull() ?: 0L
+                lower.endsWith("m") && lower.length > 1 -> (lower.dropLast(1).toLongOrNull() ?: 0L) * 60L
+                lower.endsWith("h") && lower.length > 1 -> (lower.dropLast(1).toLongOrNull() ?: 0L) * 3600L
+                else -> lower.toLongOrNull() ?: 0L
+            }
+        } catch (_: Throwable) { 0L }
     }
 
     private fun colorize(text: String, color: Int): SpannableStringBuilder {
