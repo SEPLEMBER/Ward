@@ -33,6 +33,12 @@
             android:name=".SettingsActivity"
             android:exported="false"
             android:theme="@style/AppTheme.Transparent"/>
+
+        <activity
+    android:name=".MatrixActivity"
+    android:exported="false"
+    android:theme="@style/AppTheme.Transparent" />
+
     </application>
 
 </manifest>
