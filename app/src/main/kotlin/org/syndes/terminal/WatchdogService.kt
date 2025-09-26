@@ -136,7 +136,7 @@ class WatchdogService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Syndes: Watchdog")
             .setContentText(text)
-            .setSmallIcon(R.drawable.ic_notification) // замените на ваш ресурс
+            .setSmallIcon(android.R.drawable.ic_dialog_info) // замените на ваш ресурс
             .setContentIntent(pendingOpen)
             .setOngoing(true)
             .build()
