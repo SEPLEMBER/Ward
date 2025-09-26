@@ -127,28 +127,29 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
- override fun onResume() {
-    super.onResume()
-    // register receiver for watchdog results (service broadcasts)
-    try {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) { // API 26
-            registerReceiver(
-                watchdogReceiver,
-                IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"),
-                Context.RECEIVER_NOT_EXPORTED
-            )
-        } else {
-            registerReceiver(watchdogReceiver, IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"))
-        }
-    } catch (_: Exception) { /* ignore */ }
-}
+    override fun onResume() {
+        super.onResume()
+        // register receiver for watchdog results (service broadcasts)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(
+                    watchdogReceiver,
+                    IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"),
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(watchdogReceiver, IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"))
+            }
+        } catch (_: Exception) { /* ignore */ }
+    }
 
-override fun onPause() {
-    super.onPause()
-    try {
-        unregisterReceiver(watchdogReceiver)
-    } catch (_: Exception) { /* ignore */ }
-}
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(watchdogReceiver)
+        } catch (_: Exception) { /* ignore */ }
+    }
 
     private fun sendCommand() {
         val command = inputField.text.toString().trim()
