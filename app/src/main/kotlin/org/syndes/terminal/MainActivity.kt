@@ -1,12 +1,17 @@
 package org.syndes.terminal
 
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
+import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.ScrollingMovementMethod
 import android.text.style.ForegroundColorSpan
+import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -47,6 +52,22 @@ class MainActivity : AppCompatActivity() {
         "rename", "backup", "snapshot", "trash", "cleartrash",
         "sha256", "md5", "delete all y"
     )
+
+    // receiver to show watchdog results when service finishes
+    private val watchdogReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            try {
+                val cmd = intent?.getStringExtra("cmd") ?: return
+                val result = intent.getStringExtra("result") ?: ""
+                runOnUiThread {
+                    terminalOutput.append(colorize("\n[watchdog:$cmd] $result\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)))
+                    scrollToBottom()
+                }
+            } catch (t: Throwable) {
+                Log.w("MainActivity", "watchdogReceiver failed: ${t.message}")
+            }
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -106,6 +127,30 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // register receiver for watchdog results (service broadcasts)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                registerReceiver(
+                    watchdogReceiver,
+                    IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"),
+                    Context.RECEIVER_NOT_EXPORTED
+                )
+            } else {
+                @Suppress("UnspecifiedRegisterReceiverFlag")
+                registerReceiver(watchdogReceiver, IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"))
+            }
+        } catch (_: Exception) { /* ignore */ }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        try {
+            unregisterReceiver(watchdogReceiver)
+        } catch (_: Exception) { /* ignore */ }
+    }
+
     private fun sendCommand() {
         val command = inputField.text.toString().trim()
         if (command.isEmpty()) {
@@ -125,6 +170,8 @@ class MainActivity : AppCompatActivity() {
         // ---------------------------
         // watchdog: schedule a command to be executed after delay
         // Usage: watchdog 15s <command...>   or watchdog 5m <command...> or watchdog 2h <command...>
+        // Implementation: prefer starting a Foreground Service (WatchdogService).
+        // Fallback: if service start fails, run a local coroutine (best-effort, may be cancelled when activity backgrounded).
         // ---------------------------
         if (command.startsWith("watchdog", ignoreCase = true)) {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -145,72 +192,75 @@ class MainActivity : AppCompatActivity() {
                 return
             }
 
-            // schedule coroutine in lifecycleScope
-            lifecycleScope.launch {
-                try {
-                    // show countdown using progressRow/progressText
-                    progressRow.visibility = TextView.VISIBLE
-                    progressBar.isIndeterminate = true
-                    var remaining = durSec
+            // Try to start WatchdogService (foreground). If service class not present or fails, fallback to in-activity coroutine.
+            try {
+                val svcIntent = Intent(this, WatchdogService::class.java).apply {
+                    putExtra(WatchdogService.EXTRA_CMD, targetCmd)
+                    putExtra(WatchdogService.EXTRA_DELAY_SEC, durSec)
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    ContextCompat.startForegroundService(this, svcIntent)
+                } else {
+                    startService(svcIntent)
+                }
+                terminalOutput.append(colorize("Watchdog service started: will run \"$targetCmd\" in $durToken\n", infoColor))
+            } catch (t: Throwable) {
+                // fallback: local coroutine (best-effort)
+                terminalOutput.append(colorize("Warning: cannot start watchdog service, falling back to in-app timer (may be cancelled when app backgrounded)\n", errorColor))
+                lifecycleScope.launch {
+                    try {
+                        progressRow.visibility = TextView.VISIBLE
+                        progressBar.isIndeterminate = true
+                        var remaining = durSec
 
-                    fun pretty(sec: Long): String {
-                        val h = sec / 3600
-                        val m = (sec % 3600) / 60
-                        val s = sec % 60
-                        return if (h > 0) String.format("%dh %02dm %02ds", h, m, s)
-                        else if (m > 0) String.format("%02dm %02ds", m, s)
-                        else String.format("%02ds", s)
-                    }
+                        fun pretty(sec: Long): String {
+                            val h = sec / 3600
+                            val m = (sec % 3600) / 60
+                            val s = sec % 60
+                            return if (h > 0) String.format("%dh %02dm %02ds", h, m, s)
+                            else if (m > 0) String.format("%02dm %02ds", m, s)
+                            else String.format("%02ds", s)
+                        }
 
-                    // initial display
-                    progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+                        progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
 
-                    // coarse tick: per-minute if >=60s, switch to per-second when <60s
-                    while (remaining > 0 && isActive) {
-                        if (remaining >= 60L) {
-                            val step = 60L
-                            // Wait minute by minute but be responsive to cancellation
-                            var slept = 0L
-                            while (slept < 60_000L && isActive) {
-                                delay(1000L)
-                                slept += 1000L
-                                // no UI update here; we'll update after the minute block
-                            }
-                            remaining -= step
-                            if (remaining < 0L) remaining = 0L
-                            progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
-                        } else {
-                            // per-second countdown
-                            while (remaining > 0 && isActive) {
-                                delay(1000L)
-                                remaining -= 1L
+                        while (remaining > 0 && isActive) {
+                            if (remaining >= 60L) {
+                                var slept = 0L
+                                while (slept < 60_000L && isActive) {
+                                    delay(1000L)
+                                    slept += 1000L
+                                }
+                                remaining -= 60L
                                 if (remaining < 0L) remaining = 0L
                                 progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+                            } else {
+                                while (remaining > 0 && isActive) {
+                                    delay(1000L)
+                                    remaining -= 1L
+                                    if (remaining < 0L) remaining = 0L
+                                    progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
+                                }
                             }
                         }
-                    }
 
-                    // final moment
-                    progressText.text = "Watchdog: executing \"$targetCmd\" now..."
-                    delay(250)
+                        progressText.text = "Watchdog: executing \"$targetCmd\" now..."
+                        delay(250)
 
-                    // run the command as if user input it: set inputField and call sendCommand() on main
-                    withContext(Dispatchers.Main) {
-                        inputField.setText(targetCmd)
-                        // call sendCommand() to reuse all logic
-                        sendCommand()
+                        withContext(Dispatchers.Main) {
+                            inputField.setText(targetCmd)
+                            sendCommand()
+                        }
+                    } catch (t2: Throwable) {
+                        terminalOutput.append(colorize("Error: watchdog failed: ${t2.message}\n", errorColor))
+                    } finally {
+                        progressRow.visibility = TextView.GONE
+                        progressText.text = ""
                     }
-                } catch (t: Throwable) {
-                    terminalOutput.append(colorize("Error: watchdog failed: ${t.message}\n", errorColor))
-                } finally {
-                    // cleanup UI
-                    progressRow.visibility = TextView.GONE
-                    progressText.text = ""
                 }
             }
 
-            // acknowledge scheduling
-            terminalOutput.append(colorize("Watchdog scheduled: \"$targetCmd\" in $durToken\n", infoColor))
+            // acknowledge scheduling in UI and clear input
             inputField.text.clear()
             focusAndShowKeyboard()
             return
