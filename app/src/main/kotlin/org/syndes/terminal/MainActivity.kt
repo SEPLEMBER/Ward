@@ -127,13 +127,21 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onResume() {
-        super.onResume()
-        // register receiver for watchdog results (service broadcasts)
-        try {
+override fun onResume() {
+    super.onResume()
+    // register receiver for watchdog results (service broadcasts)
+    try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(
+                watchdogReceiver,
+                IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"),
+                Context.RECEIVER_NOT_EXPORTED
+            )
+        } else {
             registerReceiver(watchdogReceiver, IntentFilter("org.syndes.terminal.WATCHDOG_RESULT"))
-        } catch (_: Exception) { /* ignore */ }
-    }
+        }
+    } catch (_: Exception) { /* ignore */ }
+}
 
     override fun onPause() {
         super.onPause()
