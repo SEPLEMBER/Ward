@@ -21,6 +21,15 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import kotlin.math.max
 import kotlin.math.min
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import androidx.core.app.NotificationCompat
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 class Terminal {
 
@@ -851,27 +860,6 @@ class Terminal {
                     if (results.isEmpty()) "No matches found." else results
                 }
 
-                // compare files line-by-line
-                "cmp" -> {
-                    if (args.size < 2) return "Usage: cmp <file1> <file2>"
-                    val f1path = args[0]; val f2path = args[1]
-                    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
-                    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
-                    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
-                    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
-                    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
-                    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
-                    val maxLines = max(lines1.size, lines2.size)
-                    for (i in 0 until maxLines) {
-                        val a = lines1.getOrNull(i)
-                        val b = lines2.getOrNull(i)
-                        if (a != b) {
-                            return "Differ at line ${i+1}:\n< ${a ?: "<no line>"}\n> ${b ?: "<no line>"}"
-                        }
-                    }
-                    "Equal"
-                }
-
                 // replace old->new in file or recursively in directory
                 "replace" -> {
                     if (args.size < 3) return "Usage: replace <old> <new> <path>"
@@ -889,30 +877,328 @@ class Terminal {
                     "Info: replaced in $changed file(s)"
                 }
 
+// compare files line-by-line or binary
+"cmp" -> {
+    if (args.size < 2) return "Usage: cmp [-b] [-i] [-n <limit>] <file1> <file2>"
+    var binary = false
+    var ignoreCase = false
+    var limit: Long = Long.MAX_VALUE
+    var argIndex = 0
+    while (argIndex < args.size && args[argIndex].startsWith("-")) {
+        when (args[argIndex]) {
+            "-b" -> binary = true
+            "-i" -> ignoreCase = true
+            "-n" -> {
+                argIndex++
+                limit = args.getOrNull(argIndex)?.toLongOrNull() ?: return "Error: invalid limit"
+            }
+            else -> return "Error: unknown option ${args[argIndex]}"
+        }
+        argIndex++
+    }
+    if (args.size - argIndex < 2) return "Usage: cmp [-b] [-i] [-n <limit>] <file1> <file2>"
+    val f1path = args[argIndex]; val f2path = args[argIndex + 1]
+    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
+    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
+    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
+    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
+    return if (binary) {
+        compareBinary(ctx, f1, f2, limit = limit)
+    } else {
+        val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
+        val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
+        val maxLines = min(max(lines1.size, lines2.size), (limit / 10).toInt().coerceAtLeast(1)) // approximate line limit
+        for (i in 0 until maxLines) {
+            val a = lines1.getOrNull(i)
+            val b = lines2.getOrNull(i)
+            val eq = if (ignoreCase) a.equals(b, ignoreCase = true) else a == b
+            if (!eq) {
+                return "Differ at line ${i+1}:\n< ${a ?: "<no line>"}\n> ${b ?: "<no line>"}"
+            }
+        }
+        "Equal"
+    }
+}
 
-                // diff: show simple differences with line numbers
-                "diff" -> {
-                    if (args.size < 2) return "Usage: diff <file1> <file2>"
-                    val f1path = args[0]; val f2path = args[1]
-                    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
-                    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
-                    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
-                    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
-                    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
-                    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
-                    val sb = StringBuilder()
-                    val maxLines = max(lines1.size, lines2.size)
-                    for (i in 0 until maxLines) {
-                        val a = lines1.getOrNull(i)
-                        val b = lines2.getOrNull(i)
-                        if (a != b) {
-                            sb.appendLine("Line ${i+1}:")
-                            sb.appendLine("  - ${a ?: "<no line>"}")
-                            sb.appendLine("  + ${b ?: "<no line>"}")
+// diff: show simple differences with line numbers
+"diff" -> {
+    if (args.size < 2) return "Usage: diff [-u] [-c <lines>] [-i] <file1> <file2>"
+    var unified = false
+    var contextLines = 3
+    var ignoreCase = false
+    var argIndex = 0
+    while (argIndex < args.size && args[argIndex].startsWith("-")) {
+        when (args[argIndex]) {
+            "-u" -> unified = true
+            "-i" -> ignoreCase = true
+            "-c" -> {
+                argIndex++
+                contextLines = args.getOrNull(argIndex)?.toIntOrNull() ?: return "Error: invalid context"
+            }
+            else -> return "Error: unknown option ${args[argIndex]}"
+        }
+        argIndex++
+    }
+    if (args.size - argIndex < 2) return "Usage: diff [-u] [-c <lines>] [-i] <file1> <file2>"
+    val f1path = args[argIndex]; val f2path = args[argIndex + 1]
+    val (p1, n1) = resolvePath(ctx, f1path) ?: return "Error: invalid path $f1path"
+    val (p2, n2) = resolvePath(ctx, f2path) ?: return "Error: invalid path $f2path"
+    val f1 = p1.findFile(n1) ?: return "Error: no such file '$f1path'"
+    val f2 = p2.findFile(n2) ?: return "Error: no such file '$f2path'"
+    val lines1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f1path" }
+    val lines2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read $f2path" }
+    val sb = StringBuilder()
+    val maxLines = max(lines1.size, lines2.size)
+    var i = 0
+    while (i < maxLines) {
+        val a = lines1.getOrNull(i)
+        val b = lines2.getOrNull(i)
+        val eq = if (ignoreCase) a.equals(b, ignoreCase = true) else a == b
+        if (!eq) {
+            if (unified) {
+                sb.appendLine("@@ -${i+1},$contextLines +${i+1},$contextLines @@")
+                for (j in max(0, i - contextLines) until i) {
+                    sb.appendLine(" ${lines1.getOrNull(j) ?: ""}")
+                }
+                if (a != null) sb.appendLine("-$a")
+                if (b != null) sb.appendLine("+$b")
+                for (j in i + 1 until min(maxLines, i + contextLines + 1)) {
+                    sb.appendLine(" ${lines1.getOrNull(j) ?: ""}")
+                }
+            } else {
+                sb.appendLine("Line ${i+1}:")
+                sb.appendLine("  - ${a ?: "<no line>"}")
+                sb.appendLine("  + ${b ?: "<no line>"}")
+            }
+            i += contextLines
+        } else {
+            i++
+        }
+    }
+    if (sb.isEmpty()) "No differences" else sb.toString()
+}
+
+// Новые команды
+
+// grep: search text in files
+"grep" -> {
+    if (args.size < 2) return "Usage: grep [-r] [-i] [-l] [-n] <pattern> <path>"
+    var recursive = false
+    var ignoreCase = false
+    var namesOnly = false
+    var lineNumbers = false
+    var argIndex = 0
+    while (argIndex < args.size && args[argIndex].startsWith("-")) {
+        when (args[argIndex]) {
+            "-r" -> recursive = true
+            "-i" -> ignoreCase = true
+            "-l" -> namesOnly = true
+            "-n" -> lineNumbers = true
+            else -> return "Error: unknown option ${args[argIndex]}"
+        }
+        argIndex++
+    }
+    if (args.size - argIndex < 2) return "Usage: grep [-r] [-i] [-l] [-n] <pattern> <path>"
+    val pattern = args[argIndex]
+    val path = args[argIndex + 1]
+    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+    val target = parent.findFile(name) ?: return "Error: no such file/dir '$path'"
+    val regex = if (ignoreCase) Regex(pattern, RegexOption.IGNORE_CASE) else Regex(pattern)
+    val sb = StringBuilder()
+    fun processFile(file: DocumentFile, relPath: String = "") {
+        if (file.isDirectory && recursive) {
+            file.listFiles().forEach { processFile(it, "$relPath${file.name}/") }
+        } else if (file.isFile) {
+            val text = try { ctx.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return }
+            var hasMatch = false
+            text.forEachIndexed { index, line ->
+                if (regex.containsMatchIn(line)) {
+                    hasMatch = true
+                    if (!namesOnly) {
+                        sb.appendLine("${relPath}${file.name}${if (lineNumbers) ":${index + 1}" else ""}: $line")
+                    }
+                }
+            }
+            if (namesOnly && hasMatch) sb.appendLine("${relPath}${file.name}")
+        }
+    }
+    processFile(target)
+    if (sb.isEmpty()) "No matches" else sb.toString()
+}
+
+// zip: create zip archive
+"zip" -> {
+    if (args.size < 2) return "Usage: zip <source> <archive>"
+    val sourcePath = args[0]
+    val zipPath = args[1]
+    val (srcParent, srcName) = resolvePath(ctx, sourcePath) ?: return "Error: invalid source path"
+    val source = srcParent.findFile(srcName) ?: return "Error: no such file/dir '$sourcePath'"
+    val (zipParent, zipName) = resolvePath(ctx, zipPath, createDirs = true) ?: return "Error: invalid zip path"
+    val zipFile = zipParent.createFile("application/zip", zipName) ?: return "Error: cannot create zip"
+    try {
+        ctx.contentResolver.openOutputStream(zipFile.uri)?.use { out ->
+            java.util.zip.ZipOutputStream(out).use { zip ->
+                fun addToZip(doc: DocumentFile, basePath: String) {
+                    val entryName = "$basePath${doc.name ?: ""}"
+                    if (doc.isDirectory) {
+                        zip.putNextEntry(java.util.zip.ZipEntry("$entryName/"))
+                        zip.closeEntry()
+                        doc.listFiles().forEach { addToZip(it, "$entryName/") }
+                    } else {
+                        zip.putNextEntry(java.util.zip.ZipEntry(entryName))
+                        ctx.contentResolver.openInputStream(doc.uri)?.use { it.copyTo(zip) }
+                        zip.closeEntry()
+                    }
+                }
+                addToZip(source, "")
+            }
+        } ?: return "Error: cannot write zip"
+        "Info: created $zipPath"
+    } catch (t: Throwable) {
+        "Error: zip failed: ${t.message ?: "unknown"}"
+    }
+}
+
+// unzip: extract zip archive
+"unzip" -> {
+    if (args.isEmpty()) return "Usage: unzip <archive> [dest]"
+    val archivePath = args[0]
+    val destPath = args.getOrNull(1) ?: ""
+    val (arcParent, arcName) = resolvePath(ctx, archivePath) ?: return "Error: invalid archive path"
+    val archive = arcParent.findFile(arcName) ?: return "Error: no such archive '$archivePath'"
+    val destDir: DocumentFile = if (destPath.isEmpty()) {
+        getCurrentDir(ctx) ?: return "Error: no current dir"
+    } else {
+        val (destParent, destName) = resolvePath(ctx, destPath, createDirs = true) ?: return "Error: invalid dest path"
+        if (destName.isEmpty()) destParent else destParent.createDirectory(destName) ?: return "Error: cannot create dest dir"
+    }
+    try {
+        ctx.contentResolver.openInputStream(archive.uri)?.use { input ->
+            java.util.zip.ZipInputStream(input).use { zip ->
+                var entry: java.util.zip.ZipEntry? = zip.nextEntry
+                while (entry != null) {
+                    val parts = entry.name.split("/").filter { it.isNotEmpty() }.toMutableList()
+                    var current = destDir
+                    while (parts.size > 1) {
+                        val dirName = parts.removeAt(0)
+                        current = current.findFile(dirName)?.takeIf { it.isDirectory } ?: current.createDirectory(dirName) ?: return "Error: cannot create dir $dirName"
+                    }
+                    if (!entry.isDirectory) {
+                        val fileName = parts.firstOrNull() ?: continue
+                        val newFile = current.createFile("application/octet-stream", fileName) ?: return "Error: cannot create file $fileName"
+                        ctx.contentResolver.openOutputStream(newFile.uri)?.use { out ->
+                            zip.copyTo(out)
                         }
                     }
-                    if (sb.isEmpty()) "No differences" else sb.toString()
+                    zip.closeEntry()
+                    entry = zip.nextEntry
                 }
+            }
+        } ?: return "Error: cannot read zip"
+        "Info: extracted to ${buildPath(destDir)}"
+    } catch (t: Throwable) {
+        "Error: unzip failed: ${t.message ?: "unknown"}"
+    }
+}
+
+// watch: periodically run command
+"watch" -> {
+    if (args.size < 2) return "Usage: watch [-n <seconds>] <command>"
+    var interval = 2
+    var argIndex = 0
+    if (args[argIndex] == "-n") {
+        argIndex++
+        interval = args.getOrNull(argIndex)?.toIntOrNull() ?: return "Error: invalid interval"
+        argIndex++
+    }
+    val command = args.drop(argIndex).joinToString(" ")
+    if (command.isEmpty()) return "Usage: watch [-n <seconds>] <command>"
+    if (ctx !is MainActivity) return "Error: watch requires Activity context"
+    ctx.lifecycleScope.launch {
+        while (isActive) {
+            val result = execute(command, ctx) ?: ""
+            ctx.terminalOutput.text = ""
+            ctx.terminalOutput.append(result)
+            delay(interval * 1000L)
+        }
+    }
+    "Info: watching '$command' every $interval s (tap output to stop if needed)"
+}
+
+// logcat: view system logs
+"logcat" -> {
+    var tag: String? = null
+    var level: String? = null
+    var lines = 100
+    var argIndex = 0
+    while (argIndex < args.size && args[argIndex].startsWith("-")) {
+        when (args[argIndex]) {
+            "-t" -> {
+                argIndex++
+                tag = args.getOrNull(argIndex)
+            }
+            "-l" -> {
+                argIndex++
+                level = args.getOrNull(argIndex)?.uppercase()
+            }
+            "-n" -> {
+                argIndex++
+                lines = args.getOrNull(argIndex)?.toIntOrNull() ?: return "Error: invalid lines"
+            }
+            else -> return "Error: unknown option ${args[argIndex]}"
+        }
+        argIndex++
+    }
+    val cmd = mutableListOf("logcat", "-d", "-t", lines.toString())
+    if (tag != null) cmd.addAll(listOf("-s", tag))
+    if (level != null && level in listOf("V", "D", "I", "W", "E")) cmd.addAll(listOf("-p", level))
+    try {
+        val pb = ProcessBuilder(cmd)
+        pb.redirectErrorStream(true)
+        val proc = pb.start()
+        val output = proc.inputStream.bufferedReader().use { it.readText() }
+        proc.waitFor()
+        output.ifBlank { "No logs" }
+    } catch (t: Throwable) {
+        "Error: logcat failed: ${t.message ?: "unknown"}"
+    }
+}
+
+// notify: send system notification
+"notify" -> {
+    var title: String? = null
+    var message: String? = null
+    var argIndex = 0
+    while (argIndex < args.size) {
+        when (args[argIndex]) {
+            "-t" -> {
+                argIndex++
+                title = args.getOrNull(argIndex)
+            }
+            "-m" -> {
+                argIndex++
+                message = args.getOrNull(argIndex)
+            }
+            else -> return "Usage: notify -t <title> -m <message>"
+        }
+        argIndex++
+    }
+    if (title.isNullOrBlank() || message.isNullOrBlank()) return "Usage: notify -t <title> -m <message>"
+    val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return "Error: no NotificationManager"
+    val channelId = "syndes_terminal"
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        val channel = NotificationChannel(channelId, "Terminal", NotificationManager.IMPORTANCE_DEFAULT)
+        nm.createNotificationChannel(channel)
+    }
+    val notification = NotificationCompat.Builder(ctx, channelId)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle(title)
+        .setContentText(message)
+        .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+        .build()
+    nm.notify(System.currentTimeMillis().toInt(), notification)
+    "Info: notification sent"
+}
 
                 // --------- CP / MV (с рекурсией и корректным поведением для директорий) ----------
                 "cp" -> {
