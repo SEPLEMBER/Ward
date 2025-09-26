@@ -95,6 +95,7 @@ class WatchdogService : Service() {
                     // If app is in foreground and has a receiver, optionally broadcast the result so UI can append it.
                     try {
                         val b = Intent("org.syndes.terminal.WATCHDOG_RESULT")
+                        b.setPackage(packageName) // Make intent explicit
                         b.putExtra("cmd", cmd)
                         b.putExtra("result", result)
                         sendBroadcast(b)
