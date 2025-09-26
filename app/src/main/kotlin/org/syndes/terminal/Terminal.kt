@@ -323,14 +323,22 @@ class Terminal {
                     else history.joinToString("\n")
                 }
 
-                "matrix" -> {
-                    if (args.getOrNull(0)?.lowercase() == "fall") {
-                        val intent = Intent(ctx, SettingsActivity::class.java)
-                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        ctx.startActivity(intent)
-                        null
-                    } else "Unknown matrix command"
-                }
+  "matrix" -> {
+    // matrix fall [color]
+    // optional second arg: "blue" or "green" (default)
+    if (args.getOrNull(0)?.lowercase() == "fall") {
+        val intent = Intent(ctx, MatrixActivity::class.java)
+        val colorArg = args.getOrNull(1)?.lowercase()
+        if (colorArg == "blue" || colorArg == "green") {
+            intent.putExtra("color", colorArg)
+        }
+        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        ctx.startActivity(intent)
+        null
+    } else {
+        "Unknown matrix command"
+    }
+}
 
                 "clear" -> {
                     history.clear()
