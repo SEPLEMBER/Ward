@@ -26,6 +26,9 @@ object Code1Module {
 
     data class Match(val type: String, val groups: List<String>)
 
+    /**
+     * Recognize condition line. Returns Match or null.
+     */
     fun matchCondition(line: String): Match? {
         val tmat = TIME_PATTERN.matcher(line)
         if (tmat.matches()) return Match("time", listOf(tmat.group(1)))
@@ -182,12 +185,5 @@ object Code1Module {
         return try {
             if (doc.isDirectory) doc.listFiles().sumOf { calculateSize(it) } else doc.length()
         } catch (_: Throwable) { 0L }
-    }
-
-    // convenience entry for validator
-    fun matchCondition(line: String): Match? = matchConditionInternal(line)
-
-    private fun matchConditionInternal(line: String): Match? {
-        return matchCondition(line)
     }
 }
