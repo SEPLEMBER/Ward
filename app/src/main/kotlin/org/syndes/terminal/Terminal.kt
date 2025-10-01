@@ -1731,6 +1731,188 @@ class Terminal {
                 }
 
                 // -------------------------
+                // File/text utilities
+                // split, dedup-files, checksum, rev, cut, join/merge, sort-lines, dup-lines
+                // -------------------------
+                "split" -> {
+                    // split <file> <lines_per_file> [prefix]
+                    if (args.size < 2) return "Usage: split <file> <lines_per_file> [prefix]"
+                    val filePath = args[0]
+                    val per = args[1].toIntOrNull() ?: return "Error: invalid lines_per_file"
+                    val prefix = args.getOrNull(2) ?: ""
+                    val (parent, name) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val file = parent.findFile(name) ?: return "Error: file not found"
+                    val lines = try { ctx.contentResolver.openInputStream(file.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file" }
+                    if (per <= 0) return "Error: lines_per_file must be > 0"
+                    val destDirName = if (prefix.isNotBlank()) "${name}_split_${prefix}" else "${name}_split"
+                    val destDir = parent.createDirectory(destDirName) ?: return "Error: cannot create destination folder"
+                    var part = 0
+                    var idx = 0
+                    while (idx < lines.size) {
+                        part++
+                        val chunk = lines.subList(idx, min(lines.size, idx + per))
+                        val partName = "${if (prefix.isNotBlank()) prefix else name}_part%03d.txt".format(part)
+                        val newFile = destDir.createFile("text/plain", partName) ?: return "Error: cannot create part file"
+                        ctx.contentResolver.openOutputStream(newFile.uri)?.use { out ->
+                            out.write(chunk.joinToString("\n").toByteArray())
+                        }
+                        idx += per
+                    }
+                    "Info: split into $part part(s) at ${buildPath(destDir)}/"
+                }
+
+                "dedup-files" -> {
+                    // dedup-files <dir> [--delete]
+                    if (args.isEmpty()) return "Usage: dedup-files <dir> [--delete]"
+                    val path = args.joinToString(" ").replace("--delete", "").trim()
+                    val doDelete = args.contains("--delete")
+                    val (parent, name) = resolvePath(ctx, path, isDir = true) ?: return "Error: invalid path"
+                    val dir = parent.findFile(name) ?: return "Error: directory not found"
+                    if (!dir.isDirectory) return "Error: target not a directory"
+                    val groups = findDuplicateFilesInDir(ctx, dir)
+                    if (groups.isEmpty()) return "No duplicate files found."
+                    val sb = StringBuilder()
+                    var groupIndex = 0
+                    for (group in groups) {
+                        groupIndex++
+                        sb.appendLine("Group #$groupIndex (size=${group.sumOf { it.length() }} bytes):")
+                        for ((i, f) in group.withIndex()) {
+                            sb.appendLine("  [${i}] ${f.name} (${f.length()} bytes) at ${buildPath(f)}")
+                        }
+                        if (doDelete) {
+                            // keep first, delete others
+                            for (f in group.drop(1)) {
+                                try { f.delete(); sb.appendLine("    Deleted ${f.name}") } catch (_: Throwable) { sb.appendLine("    Failed to delete ${f.name}") }
+                            }
+                        }
+                        sb.appendLine()
+                    }
+                    if (doDelete) sb.appendLine("Info: deleted duplicates (kept first in each group).")
+                    sb.toString()
+                }
+
+                "checksum" -> {
+                    // checksum <file> [md5|sha256]
+                    if (args.isEmpty()) return "Usage: checksum <file> [md5|sha256]"
+                    val path = args.joinToString(" ")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val f = parent.findFile(name) ?: return "Error: file not found"
+                    val algo = args.getOrNull(args.size - 1)?.lowercase()?.let { if (it == "md5" || it == "sha256") it else null }
+                    val chosen = when (algo) {
+                        "md5" -> "MD5"
+                        "sha256" -> "SHA-256"
+                        else -> "SHA-256"
+                    }
+                    val hash = computeHashForSAF(ctx, f, chosen) ?: return "Error: cannot read file"
+                    "$chosen: $hash"
+                }
+
+                "rev" -> {
+                    // rev <file> [--inplace] (reverse order of lines)
+                    if (args.isEmpty()) return "Usage: rev <file> [--inplace]"
+                    val path = args[0]
+                    val inplace = args.contains("--inplace")
+                    val (parent, name) = resolvePath(ctx, path) ?: return "Error: invalid path"
+                    val f = parent.findFile(name) ?: return "Error: file not found"
+                    val lines = try { ctx.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file" }
+                    val outTxt = lines.reversed().joinToString("\n")
+                    if (inplace) {
+                        val out = ctx.contentResolver.openOutputStream(f.uri, "wt") ?: return "Error: cannot open file for writing"
+                        out.use { it.write(outTxt.toByteArray()) }
+                        "Info: reversed lines in place"
+                    } else {
+                        outTxt
+                    }
+                }
+
+                "cut" -> {
+                    // cut -d<delim> -f<fields> <file>
+                    // example: cut -d, -f1,3 file.csv
+                    if (args.size < 2) return "Usage: cut -d<delim> -f<fields> <file>"
+                    var delim = "\t"
+                    var fieldsSpec = ""
+                    var fileArg = ""
+                    var i = 0
+                    while (i < args.size) {
+                        val a = args[i]
+                        if (a.startsWith("-d") && a.length > 2) delim = a.substring(2)
+                        else if (a == "-d" && i + 1 < args.size) { delim = args[i + 1]; i++ }
+                        else if (a.startsWith("-f") && a.length > 2) fieldsSpec = a.substring(2)
+                        else if (a == "-f" && i + 1 < args.size) { fieldsSpec = args[i + 1]; i++ }
+                        else fileArg = a
+                        i++
+                    }
+                    if (fileArg.isEmpty()) return "Usage: cut -d<delim> -f<fields> <file>"
+                    val (parent, name) = resolvePath(ctx, fileArg) ?: return "Error: invalid path"
+                    val f = parent.findFile(name) ?: return "Error: file not found"
+                    val lines = try { ctx.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file" }
+                    val fieldIndices = parseFieldList(fieldsSpec)
+                    if (fieldIndices.isEmpty()) return "Error: invalid field list"
+                    val out = lines.map { line ->
+                        val parts = line.split(delim)
+                        fieldIndices.mapNotNull { idx -> parts.getOrNull(idx - 1) }.joinToString(delim)
+                    }.joinToString("\n")
+                    out
+                }
+
+                "join", "merge" -> {
+                    // join <file1> <file2> [sep]  -> zip by lines into one file/stdout with sep (default \t)
+                    if (args.size < 2) return "Usage: join <file1> <file2> [sep]"
+                    val f1p = args[0]; val f2p = args[1]; val sep = args.getOrNull(2) ?: "\t"
+                    val (p1, n1) = resolvePath(ctx, f1p) ?: return "Error: invalid path $f1p"
+                    val (p2, n2) = resolvePath(ctx, f2p) ?: return "Error: invalid path $f2p"
+                    val f1 = p1.findFile(n1) ?: return "Error: file1 not found"
+                    val f2 = p2.findFile(n2) ?: return "Error: file2 not found"
+                    val l1 = try { ctx.contentResolver.openInputStream(f1.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file1" }
+                    val l2 = try { ctx.contentResolver.openInputStream(f2.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file2" }
+                    val max = max(l1.size, l2.size)
+                    val sb = StringBuilder()
+                    for (i in 0 until max) {
+                        val a = l1.getOrNull(i) ?: ""
+                        val b = l2.getOrNull(i) ?: ""
+                        sb.appendLine(listOf(a, b).joinToString(sep))
+                    }
+                    sb.toString()
+                }
+
+                "sort-lines" -> {
+                    // sort-lines <file> [--unique] [--reverse] [--inplace]
+                    if (args.isEmpty()) return "Usage: sort-lines <file> [--unique] [--reverse] [--inplace]"
+                    val filePath = args[0]
+                    val unique = args.contains("--unique")
+                    val rev = args.contains("--reverse")
+                    val inplace = args.contains("--inplace")
+                    val (parent, name) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val f = parent.findFile(name) ?: return "Error: file not found"
+                    val lines = try { ctx.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file" }
+                    val sorted = if (unique) lines.distinct().sorted() else lines.sorted()
+                    val finalList = if (rev) sorted.reversed() else sorted
+                    val outText = finalList.joinToString("\n")
+                    if (inplace) {
+                        ctx.contentResolver.openOutputStream(f.uri, "wt")?.use { it.write(outText.toByteArray()) }
+                        "Info: sorted ${finalList.size} lines in place"
+                    } else outText
+                }
+
+                "dup-lines", "duplicate-lines", "dup-lines-in-file" -> {
+                    // dup-lines <file> [--count] [--show-only-duplicates]
+                    if (args.isEmpty()) return "Usage: dup-lines <file> [--count] [--show-only-duplicates]"
+                    val filePath = args[0]
+                    val showCount = args.contains("--count")
+                    val onlyDup = args.contains("--show-only-duplicates")
+                    val (parent, name) = resolvePath(ctx, filePath) ?: return "Error: invalid path"
+                    val f = parent.findFile(name) ?: return "Error: file not found"
+                    val lines = try { ctx.contentResolver.openInputStream(f.uri)?.bufferedReader()?.use { it.readLines() } ?: emptyList() } catch (_: Throwable) { return "Error: cannot read file" }
+                    val freq = lines.groupingBy { it }.eachCount().toSortedMap()
+                    val sb = StringBuilder()
+                    for ((line, cnt) in freq) {
+                        if (onlyDup && cnt < 2) continue
+                        if (showCount) sb.appendLine("[$cnt] $line") else sb.appendLine(line)
+                    }
+                    sb.toString()
+                }
+
+                // -------------------------
                 // Extras: mem, device
                 // -------------------------
                 "mem" -> {
@@ -1994,6 +2176,90 @@ private fun decryptInDir(ctx: Context, password: String, dir: DocumentFile): Int
     } catch (_: Throwable) { }
     return changed
 }
+
+    // ---------------------------
+    // Dup-helpers for new commands
+    // ---------------------------
+
+    /**
+     * Find duplicate files in a directory (non-recursive by default, recursive if requested).
+     * Returns list of groups (each group: List<DocumentFile>) where each group has >= 2 files with identical content.
+     *
+     * Алгоритм:
+     * 1) группируем по размеру (быстро)
+     * 2) для групп с >1 файла считаем хэш (SHA-256) и группируем по хэшу
+     */
+    private fun findDuplicateFilesInDir(ctx: Context, dir: DocumentFile, recursive: Boolean = true): List<List<DocumentFile>> {
+        val files = mutableListOf<DocumentFile>()
+        try {
+            fun collect(d: DocumentFile) {
+                for (c in d.listFiles()) {
+                    if (c.isDirectory && recursive) collect(c)
+                    else if (c.isFile) files.add(c)
+                }
+            }
+            collect(dir)
+        } catch (_: Throwable) { /* ignore */ }
+
+        // group by size
+        val bySize = files.groupBy { it.length() }
+        val groups = mutableListOf<List<DocumentFile>>()
+        for ((size, list) in bySize) {
+            if (list.size < 2) continue
+            // for candidates, compute hash
+            val mapHash = mutableMapOf<String, MutableList<DocumentFile>>()
+            for (f in list) {
+                val h = computeHashForSAF(ctx, f, "SHA-256") ?: continue
+                mapHash.getOrPut(h) { mutableListOf() }.add(f)
+            }
+            for ((_, same) in mapHash) {
+                if (same.size > 1) groups.add(same)
+            }
+        }
+        return groups
+    }
+
+    /**
+     * Parse field list string like "1,3,5-7" into set of integers (1-based field numbers).
+     */
+    private fun parseFieldList(spec: String): List<Int> {
+        val res = mutableListOf<Int>()
+        if (spec.isBlank()) return res
+        val parts = spec.split(",").map { it.trim() }.filter { it.isNotEmpty() }
+        for (p in parts) {
+            if (p.contains("-")) {
+                val bounds = p.split("-", limit = 2)
+                val a = bounds[0].toIntOrNull()
+                val b = bounds.getOrNull(1)?.toIntOrNull()
+                if (a != null && b != null && a <= b) {
+                    for (i in a..b) res.add(i)
+                }
+            } else {
+                val v = p.toIntOrNull()
+                if (v != null) res.add(v)
+            }
+        }
+        return res.distinct().sorted()
+    }
+
+    /**
+     * Helper: read lines from DocumentFile, returns null on error.
+     */
+    private fun readLinesFromDoc(ctx: Context, doc: DocumentFile): List<String>? {
+        return try {
+            ctx.contentResolver.openInputStream(doc.uri)?.bufferedReader()?.use { it.readLines() }
+        } catch (_: Throwable) { null }
+    }
+
+    /**
+     * Helper: write text to DocumentFile (overwrites), returns true on success.
+     */
+    private fun writeTextToDoc(ctx: Context, doc: DocumentFile, text: String): Boolean {
+        return try {
+            ctx.contentResolver.openOutputStream(doc.uri, "wt")?.use { it.write(text.toByteArray()) }
+            true
+        } catch (_: Throwable) { false }
+    }
 
     // -------------------------
 // Network helper functions (ping/dns/http/git-download)
