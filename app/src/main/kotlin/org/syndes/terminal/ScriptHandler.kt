@@ -7,16 +7,29 @@ import android.os.Looper
 import androidx.documentfile.provider.DocumentFile
 import java.io.BufferedReader
 import java.io.InputStreamReader
+import java.util.Collections
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
+/**
+ * ScriptHandler — центральный менеджер скриптов:
+ * - парсит текст скрипта (header + blocks)
+ * - поддерживает валидацию
+ * - запускает модули (MVP includes Code1Module)
+ * - хранит активные отложенные задачи и умеет их отменять
+ */
 object ScriptHandler {
 
     private val handler = Handler(Looper.getMainLooper())
+    // scriptId -> list of scheduled runnables
     private val activeSchedules = ConcurrentHashMap<String, MutableList<RunnableHolder>>()
     private val idCounter = AtomicInteger(1)
 
     private data class RunnableHolder(val id: String, val runnable: Runnable)
+
+    // -------------------------
+    // Public helpers to start/stop
+    // -------------------------
 
     fun startScriptFromUri(ctx: Context, scriptUri: Uri): String {
         val doc = DocumentFile.fromSingleUri(ctx, scriptUri) ?: return "Error: cannot access script Uri"
@@ -35,11 +48,11 @@ object ScriptHandler {
     }
 
     /**
-     * Validate script text (parse header & body, check module availability and whether conditions are recognized)
-     * Returns textual report but does not start scheduling or execute actions.
+     * Validate script — checks #metadata/modules and whether conditions are recognized by available modules.
+     * Returns human-readable report.
      */
     fun validateScriptText(ctx: Context, scriptText: String): String {
-        val lines = scriptText.lines().map { it.trimEnd() }
+        val lines = scriptText.lines()
         val header = mutableMapOf<String, String>()
         var bodyStart = 0
         for ((i, raw) in lines.withIndex()) {
@@ -56,7 +69,6 @@ object ScriptHandler {
                     val parts = content.split("\\s+".toRegex(), limit = 2)
                     if (parts.size == 2) header[parts[0].lowercase()] = parts[1].trim()
                 }
-                continue
             } else {
                 bodyStart = i
                 break
@@ -67,10 +79,8 @@ object ScriptHandler {
         if (modulesSpec.isBlank()) return "Error: no #metadata or #modules specified"
 
         val moduleNames = modulesSpec.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-
-        // check modules exist (MVP: only Code1Module exists)
         for (m in moduleNames) {
-            if (!m.equals("Code1", ignoreCase = true)) return "Error: module '$m' not found (MVP supports Code1)"
+            if (!m.equals("Code1", ignoreCase = true)) return "Error: module '$m' not available (MVP supports Code1)"
         }
 
         val bodyLines = lines.drop(bodyStart).map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
@@ -89,16 +99,14 @@ object ScriptHandler {
                     i++
                 }
                 if (i < bodyLines.size && bodyLines[i].equals("fi", ignoreCase = true)) i++
-                // validate condition with Code1Module
                 val match = Code1Module.matchCondition(cond)
                 if (match == null) unrecognized.add(cond)
-                // optional: validate action lines format? skip for now
             } else {
-                // immediate action or conditionless line
+                // immediate action or simple conditionline
                 val condline = if (line.startsWith("- ")) line.removePrefix("- ").trim() else line
                 val match = Code1Module.matchCondition(condline)
                 if (match == null) {
-                    // treat as action (command) — we consider actions valid (we cannot check all commands here)
+                    // if it's not recognized as condition — we treat as action -> fine
                 }
                 i++
             }
@@ -108,9 +116,16 @@ object ScriptHandler {
         else "Validation: found ${unrecognized.size} unrecognized condition(s):\n" + unrecognized.joinToString("\n")
     }
 
+    /**
+     * Start script from text. Parses header/modules and body blocks, registers scheduled tasks and/or executes immediate actions.
+     * Returns an ID and a small log.
+     */
     fun startScriptFromText(ctx: Context, scriptText: String): String {
-        val lines = scriptText.lines().map { it.trimEnd() }
+        val scriptId = "script-${idCounter.getAndIncrement()}"
+        val log = StringBuilder()
 
+        // parse header
+        val lines = scriptText.lines()
         val header = mutableMapOf<String, String>()
         var bodyStart = 0
         for ((i, raw) in lines.withIndex()) {
@@ -127,7 +142,6 @@ object ScriptHandler {
                     val parts = content.split("\\s+".toRegex(), limit = 2)
                     if (parts.size == 2) header[parts[0].lowercase()] = parts[1].trim()
                 }
-                continue
             } else {
                 bodyStart = i
                 break
@@ -139,15 +153,15 @@ object ScriptHandler {
             return "Error: no #metadata or #modules specified"
         }
         val moduleNames = modulesSpec.split(",").map { it.trim() }.filter { it.isNotEmpty() }
-
         val modules = mutableListOf<Any>()
         for (m in moduleNames) {
-            if (m.equals("Code1", ignoreCase = true) || m.equals("code1", ignoreCase = true)) modules.add(Code1Module)
+            if (m.equals("Code1", ignoreCase = true)) modules.add(Code1Module)
             else return "Error: module '$m' not found"
         }
 
-        val bodyLines = lines.drop(bodyStart).map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
+        // parse body into blocks (if ... fi) or immediate action lines
         data class ParsedBlock(val conditionLine: String, val actions: List<String>)
+        val bodyLines = lines.drop(bodyStart).map { it.trim() }.filter { it.isNotEmpty() && !it.startsWith("#") }
         val parsedBlocks = mutableListOf<ParsedBlock>()
         var i = 0
         while (i < bodyLines.size) {
@@ -164,29 +178,36 @@ object ScriptHandler {
                 if (i < bodyLines.size && bodyLines[i].equals("fi", ignoreCase = true)) i++
                 parsedBlocks.add(ParsedBlock(cond, actions))
             } else {
+                // immediate action or conditionless action
                 if (line.startsWith("- ")) parsedBlocks.add(ParsedBlock(line.removePrefix("- ").trim(), emptyList()))
                 else parsedBlocks.add(ParsedBlock(line, emptyList()))
                 i++
             }
         }
 
-        val scriptId = "script-${idCounter.getAndIncrement()}"
-        activeSchedules[scriptId] = mutableListOf()
+        // prepare runtime that modules will use
+        activeSchedules[scriptId] = Collections.synchronizedList(mutableListOf())
 
         val runtime = object : ScriptRuntime {
             override fun executeActionsNow(actions: List<String>) {
+                // run in background thread to avoid blocking UI; Terminal.execute will add FLAG_NEW_TASK if needed
                 Thread {
                     val term = Terminal()
                     for (act in actions) {
-                        try { term.execute(act, ctx) } catch (_: Throwable) {}
+                        try {
+                            term.execute(act, ctx)
+                        } catch (_: Throwable) {
+                        }
                     }
                 }.start()
             }
 
             override fun scheduleActionsDelay(scriptIdLocal: String, delayMillis: Long, actions: List<String>): String {
-                val rid = "${scriptIdLocal}-${System.currentTimeMillis()}"
+                val rid = "sch-${scriptIdLocal}-${System.currentTimeMillis()}-${idCounter.incrementAndGet()}"
                 val runnable = Runnable {
+                    // execute on worker thread
                     executeActionsNow(actions)
+                    // remove self from active list
                     activeSchedules[scriptId]?.removeIf { it.id == rid }
                 }
                 handler.postDelayed(runnable, delayMillis)
@@ -195,7 +216,7 @@ object ScriptHandler {
             }
         }
 
-        val log = StringBuilder()
+        // process parsed blocks
         for (block in parsedBlocks) {
             var handled = false
             for (mod in modules) {
@@ -209,15 +230,8 @@ object ScriptHandler {
                                 log.append("Executed: ${res.info}\n")
                             }
                             is ModuleResult.Scheduled -> {
-                                // schedule via handler
-                                val rid = "${scriptId}-${System.currentTimeMillis()}"
-                                val runnable = Runnable {
-                                    runtime.executeActionsNow(res.actions.ifEmpty { block.actions })
-                                    activeSchedules[scriptId]?.removeIf { it.id == rid }
-                                }
-                                handler.postDelayed(runnable, res.delayMillis)
-                                activeSchedules[scriptId]?.add(RunnableHolder(rid, runnable))
-                                log.append("Scheduled: ${res.info}\n")
+                                val rid = runtime.scheduleActionsDelay(scriptId, res.delayMillis, res.actions.ifEmpty { block.actions })
+                                log.append("Scheduled: ${res.info} (rid=$rid)\n")
                             }
                             is ModuleResult.Error -> {
                                 log.append("Module error: ${res.message}\n")
@@ -228,8 +242,10 @@ object ScriptHandler {
                     }
                 }
             }
+
             if (!handled) {
                 if (block.actions.isEmpty()) {
+                    // treat conditionLine as immediate command
                     runtime.executeActionsNow(listOf(block.conditionLine))
                     log.append("Executed immediate: ${block.conditionLine}\n")
                 } else {
@@ -241,9 +257,19 @@ object ScriptHandler {
         return "Script started: $scriptId\n" + log.toString()
     }
 
+    /**
+     * Stop all scheduled tasks for scriptId
+     */
     fun stopScript(scriptId: String): String {
         val list = activeSchedules.remove(scriptId) ?: return "No such active script: $scriptId"
-        for (holder in list) handler.removeCallbacks(holder.runnable)
-        return "Stopped script $scriptId and cancelled ${list.size} scheduled tasks"
+        var cancelled = 0
+        synchronized(list) {
+            for (holder in list) {
+                handler.removeCallbacks(holder.runnable)
+                cancelled++
+            }
+            list.clear()
+        }
+        return "Stopped script $scriptId and cancelled $cancelled scheduled task(s)"
     }
 }
