@@ -50,7 +50,7 @@ class MainActivity : AppCompatActivity() {
     private val heavyCommands = setOf(
         "rm", "cp", "mv", "replace", "encrypt", "decrypt", "cmp", "diff",
         "rename", "backup", "snapshot", "trash", "cleartrash",
-        "sha256", "md5", "delete all y"
+        "sha256", "grep", "batchrename", "md5", "delete all y"
     )
 
     // receiver to show watchdog results when service finishes
