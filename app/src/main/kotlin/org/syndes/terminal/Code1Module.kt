@@ -2,25 +2,25 @@ package org.syndes.terminal
 
 import android.content.Context
 import androidx.documentfile.provider.DocumentFile
-import java.util.Calendar
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Locale
 import java.util.regex.Pattern
 import kotlin.math.max
+import kotlin.math.min
 
 /**
- * Code1Module:
- * - if time HH:MM    -> schedule actions at next HH:MM
- * - wait:N sec       -> schedule after N seconds
- * - if exists <path> -> true if path exists in work dir (supports absolute home/... or relative)
- * - if size <|>|= N <path> -> compare size in bytes (supports suffix K/M)
- *
- * Module возвращает ModuleResult (НЕ выполняет действия напрямую).
+ * Code1Module — MVP module implementing simple conditions:
+ *  - if time HH:MM           -> schedule at next HH:MM
+ *  - wait <num>[s|m|h]       -> schedule after given interval
+ *  - if exists <path>        -> if exists immediately execute actions
+ *  - if size <cmp> <num[K|M]?> <path> -> compare size and execute if matches
  */
 object Code1Module {
 
     private val TIME_PATTERN = Pattern.compile("""^if\s+time\s+(\d{1,2}:\d{2})\s*$""", Pattern.CASE_INSENSITIVE)
-    private val WAIT_PATTERN = Pattern.compile("""^wait\s*:\s*(\d+)\s*sec\s*$""", Pattern.CASE_INSENSITIVE)
+    // support "wait 10s" or "wait 5m" or "wait 2h" or "wait:10s" (flexible)
+    private val WAIT_PATTERN = Pattern.compile("""^wait\s*:?\s*(\d+)([smhSMH])?\s*$""", Pattern.CASE_INSENSITIVE)
     private val EXISTS_PATTERN = Pattern.compile("""^if\s+exists\s+(.+)$""", Pattern.CASE_INSENSITIVE)
     private val SIZE_PATTERN = Pattern.compile("""^if\s+size\s*(>=|<=|>|<|=)\s*([\dKMkm]+)\s+(.+)$""", Pattern.CASE_INSENSITIVE)
 
@@ -29,13 +29,31 @@ object Code1Module {
     fun matchCondition(line: String): Match? {
         val tmat = TIME_PATTERN.matcher(line)
         if (tmat.matches()) return Match("time", listOf(tmat.group(1)))
+
         val wmat = WAIT_PATTERN.matcher(line)
-        if (wmat.matches()) return Match("wait", listOf(wmat.group(1)))
+        if (wmat.matches()) {
+            val num = wmat.group(1)
+            val suf = wmat.group(2) ?: ""
+            return Match("wait", listOf(num, suf))
+        }
+
         val emat = EXISTS_PATTERN.matcher(line)
         if (emat.matches()) return Match("exists", listOf(emat.group(1)))
+
         val smat = SIZE_PATTERN.matcher(line)
         if (smat.matches()) return Match("size", listOf(smat.group(1), smat.group(2), smat.group(3)))
+
         return null
+    }
+
+    private fun parseDurationToMillis(numStr: String, suffix: String?): Long {
+        val n = numStr.toLongOrNull() ?: return 0L
+        return when (suffix?.lowercase(Locale.getDefault())) {
+            "h" -> n * 3600_000L
+            "m" -> n * 60_000L
+            "s", "" -> n * 1000L
+            else -> n * 1000L
+        }
     }
 
     private fun parseBytesWithSuffix(s: String): Long {
@@ -51,7 +69,7 @@ object Code1Module {
         } catch (_: Throwable) { 0L }
     }
 
-    /** Resolve path inside work dir (SAF). */
+    /** Resolve path inside work dir (SAF). Returns DocumentFile or null. */
     private fun resolveInWork(ctx: Context, path: String): DocumentFile? {
         val prefs = ctx.getSharedPreferences("terminal_prefs", Context.MODE_PRIVATE)
         val uriStr = prefs.getString("work_dir_uri", null) ?: return null
@@ -107,31 +125,30 @@ object Code1Module {
 
                     val now = Calendar.getInstance()
                     val target = Calendar.getInstance()
-                    target.set(Calendar.HOUR_OF_DAY, max(0, minOf(hour, 23)))
-                    target.set(Calendar.MINUTE, max(0, minOf(minute, 59)))
+                    target.set(Calendar.HOUR_OF_DAY, max(0, min(hour, 23)))
+                    target.set(Calendar.MINUTE, max(0, min(minute, 59)))
                     target.set(Calendar.SECOND, 0)
                     target.set(Calendar.MILLISECOND, 0)
                     if (target.timeInMillis <= now.timeInMillis) target.add(Calendar.DAY_OF_YEAR, 1)
 
                     val delay = target.timeInMillis - now.timeInMillis
                     val sdf = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
-                    val id = runtime.scheduleActionsDelay("timeTask-${hour}-${minute}-${System.currentTimeMillis()}", delay, actions)
-                    ModuleResult.Scheduled("scheduled at ${sdf.format(target.time)} (delay ${delay} ms), id=$id")
+                    ModuleResult.Scheduled("scheduled at ${sdf.format(target.time)}", delay, actions)
                 }
 
                 "wait" -> {
-                    val secs = match.groups.getOrNull(0)?.toLongOrNull() ?: return ModuleResult.Error("bad wait")
-                    val delay = secs * 1000L
-                    val id = runtime.scheduleActionsDelay("waitTask-${System.currentTimeMillis()}", delay, actions)
-                    ModuleResult.Scheduled("scheduled after ${secs}s, id=$id")
+                    val numStr = match.groups.getOrNull(0) ?: return ModuleResult.Error("bad wait")
+                    val suf = match.groups.getOrNull(1) ?: ""
+                    val delay = parseDurationToMillis(numStr, if (suf.isBlank()) null else suf)
+                    if (delay <= 0L) return ModuleResult.Error("bad wait duration")
+                    ModuleResult.Scheduled("scheduled after ${delay} ms", delay, actions)
                 }
 
                 "exists" -> {
                     val p = match.groups.getOrNull(0)?.trim() ?: return ModuleResult.Error("bad path")
                     val found = resolveInWork(ctx, p)
-                    if (found != null) {
-                        runtime.executeActionsNow(actions)
-                        ModuleResult.Executed("exists: $p")
+                    return if (found != null) {
+                        ModuleResult.Executed("exists: $p", actions)
                     } else ModuleResult.Error("not found: $p")
                 }
 
@@ -150,16 +167,14 @@ object Code1Module {
                         "=" -> size == needed
                         else -> false
                     }
-                    if (ok) {
-                        runtime.executeActionsNow(actions)
-                        ModuleResult.Executed("size check passed ($size bytes for $p)")
-                    } else ModuleResult.Error("size check failed ($size bytes for $p, need $cmp $needed)")
+                    return if (ok) ModuleResult.Executed("size check passed ($size bytes for $p)", actions)
+                    else ModuleResult.Error("size check failed ($size bytes for $p, need $cmp $needed)")
                 }
 
                 else -> ModuleResult.Error("unsupported match type")
             }
         } catch (t: Throwable) {
-            ModuleResult.Error("module error")
+            ModuleResult.Error("module error: ${t.message ?: "unknown"}")
         }
     }
 
@@ -167,5 +182,12 @@ object Code1Module {
         return try {
             if (doc.isDirectory) doc.listFiles().sumOf { calculateSize(it) } else doc.length()
         } catch (_: Throwable) { 0L }
+    }
+
+    // convenience entry for validator
+    fun matchCondition(line: String): Match? = matchConditionInternal(line)
+
+    private fun matchConditionInternal(line: String): Match? {
+        return matchCondition(line)
     }
 }
