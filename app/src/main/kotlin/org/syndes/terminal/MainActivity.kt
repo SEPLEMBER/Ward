@@ -11,7 +11,6 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.ScrollingMovementMethod
 import android.text.style.ForegroundColorSpan
-import android.util.Log
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -42,7 +41,7 @@ class MainActivity : AppCompatActivity() {
 
     private var progressJob: Job? = null
 
-    private val terminal = Terminal() // предполагается, что Terminal.kt существует
+    private val terminal = Terminal()
 
     private val PREFS_NAME = "terminal_prefs"
 
@@ -64,7 +63,7 @@ class MainActivity : AppCompatActivity() {
                     scrollToBottom()
                 }
             } catch (t: Throwable) {
-                Log.w("MainActivity", "watchdogReceiver failed: ${t.message}")
+                // intentionally silent (logging removed)
             }
         }
     }
