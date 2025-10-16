@@ -26,10 +26,6 @@ class SettingsActivity : AppCompatActivity() {
 
     private lateinit var workFolderUriView: TextView
     private lateinit var chooseFolderBtn: Button
-    private lateinit var themeGroup: RadioGroup
-    private lateinit var themeDark: RadioButton
-    private lateinit var themeLight: RadioButton
-    private lateinit var themeAuto: RadioButton
     private lateinit var autoScrollSwitch: SwitchCompat
     private lateinit var aliasesField: EditText
     private lateinit var saveButton: Button
@@ -44,10 +40,6 @@ class SettingsActivity : AppCompatActivity() {
 
         workFolderUriView = findViewById(R.id.workFolderUri)
         chooseFolderBtn = findViewById(R.id.chooseFolderBtn)
-        themeGroup = findViewById(R.id.themeGroup)
-        themeDark = findViewById(R.id.themeDark)
-        themeLight = findViewById(R.id.themeLight)
-        themeAuto = findViewById(R.id.themeAuto)
         autoScrollSwitch = findViewById(R.id.autoScrollSwitch)
         aliasesField = findViewById(R.id.aliasesField)
         saveButton = findViewById(R.id.saveButton)
@@ -132,26 +124,17 @@ class SettingsActivity : AppCompatActivity() {
             workFolderUriView.text = "(not set)"
         }
 
-        when (prefs.getString("theme", "dark")) {
-            "dark" -> themeDark.isChecked = true
-            "light" -> themeLight.isChecked = true
-            else -> themeAuto.isChecked = true
-        }
+        // Theme removed — не устанавливаем/не читаем параметры темы
 
         autoScrollSwitch.isChecked = prefs.getBoolean("scroll_behavior", true)
         aliasesField.setText(prefs.getString("aliases", ""))
     }
 
-    // Save other prefs (theme, scroll, aliases)
+    // Save other prefs (scroll, aliases)
     private fun saveValues() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
 
-        val theme = when (themeGroup.checkedRadioButtonId) {
-            R.id.themeDark -> "dark"
-            R.id.themeLight -> "light"
-            else -> "auto"
-        }
-        prefs.putString("theme", theme)
+        // Theme removed — не сохраняем параметр темы
         prefs.putBoolean("scroll_behavior", autoScrollSwitch.isChecked)
         prefs.putString("aliases", aliasesField.text.toString().trim())
         prefs.apply()
@@ -163,7 +146,7 @@ class SettingsActivity : AppCompatActivity() {
         prefs.remove("work_dir_uri")
         prefs.remove("current_dir_uri")
         prefs.remove("aliases")
-        prefs.remove("theme")
+        // prefs.remove("theme")  // удалено: тема больше не используется
         prefs.remove("scroll_behavior")
         prefs.apply()
         loadValues()
@@ -188,6 +171,7 @@ class SettingsActivity : AppCompatActivity() {
             val scripts = tree.findFile("scripts") ?: tree.createDirectory("scripts")
             val logs = tree.findFile("logs") ?: tree.createDirectory("logs")
             // также можно создать скрытую папку для внутренних метаданных
+            val meta = tree.findFile(".syd_meta") ?: tree.createDirectory(".syd_meta")
             val meta = tree.findFile(".syd_meta") ?: tree.createDirectory(".syd_meta")
             // no further action; creation is best-effort
         } catch (t: Throwable) {
