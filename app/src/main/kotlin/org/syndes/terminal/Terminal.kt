@@ -78,77 +78,21 @@ class Terminal {
 
         return try {
             when (cmdName) {
-                "help" -> {
+                "hi" -> {
                     """
-                    Available commands:
-                      help            - show this help
-                      about           - app info/version
-                      echo <text>     - print text (supports > file for redirect)
-                      open <app name> - launch app by visible name (e.g. open Minecraft)
-                      open <file>     - open file in associated app (e.g. open file.txt)
-                      launch <app>    - explicitly launch app (alias to open-app)
-                      history         - show input history
-                      clear           - clear terminal history (internal)
-                      settings|console- open settings screen
-                      clearwork       - clear work folder (SAF) configured in settings (recursive)
-                      ls|dir          - list files in current directory
-                      cd <dir>        - change directory (supports .., relative paths, 'home')
-                      pwd             - print working directory path
-                      cp <src> <dst>  - copy file/dir (supports relative paths)
-                      mv <src> <dst>  - move file/dir (supports relative paths)
-                      rm [-r] <file>  - remove file or dir (recursive with -r, supports paths)
-                      mkdir <name>    - create directory (supports paths)
-                      touch <name>    - create empty file (supports paths)
-                      cat <file>      - display file contents (supports paths)
-                      ln <src> <link> - create pseudo-link (copy) of file (supports paths)
-                      wc <file>       - word count: lines, words, chars (supports paths)
-                      head <file> [n] - show first n lines (default 10, supports paths)
-                      tail <file> [n] - show last n lines (default 10, supports paths)
-                      du <file|dir>   - show size in bytes (recursive for dirs, supports paths)
-                      stat <path>     - show file/dir stats (size, type, modified)
-                      find <name>     - find files by name in current dir
-                      cmp <f1> <f2>   - compare two text files (line-by-line)
-                      diff <f1> <f2>  - show differences with line numbers
-                      replace <old> <new> <path> - replace text in file or recursively in directory
-                      rename <old> <new> <path> - rename filenames in dir (substring replace; use {} in new for counter)
-                      encrypt <password> <path> - encrypt text files (recursively if dir)
-                      decrypt <password> <path> - decrypt text files (recursively if dir)
-                      
-                      !!! WARNING (ENCRYPT): encrypting large folders is CPU-intensive.
-                      Please encrypt small folders or specific directories one-by-one.
-                      Iterations = 1000 (LOW). This provides only limited KDF hardness.
-                      Use a strong password — recommendation: minimum **8 different characters** (no enforcement).
-                       (Encryption here is a convenience/bonus — responsibility for secure passwords is on the user.)
-                      
-                      wait <seconds>  - block commands for given seconds (persist until timeout)
-                      pm list [user|system] - list installed packages (all or filtered)
-                      pm install <apk>- install APK from work dir (supports paths)
-                      pm uninstall <pkg|appname> - uninstall package or app by name
-                      pm launch <pkg|appname> - launch package or app by name
-                      date            - show current date/time
-                      whoami          - show user info
-                      uname           - show system info
-                      uptime          - show system uptime
-                      which <cmd>     - check if command exists
-                      alias <name>=<command> - set alias
-                      alias list      - list aliases
-                      alias run <name>- run alias
-                      unalias <name>  - remove alias
-                      env             - show environment vars
-                      sms [number] [text] - open SMS app (with number and text)
-                      call <number>   - dial number
-                      email [address] [subject] [body] - open email app (with address, subject, body)
-                      browser [url]   - open browser (with URL)
-                      search <query>  - web search query
-                      contacts, alarm, calc, vpns, btss, wifi, bts, data, apm, snd, dsp, apps, stg, sec, loc, nfc, cam, clk, notif, acc, dev
-                      
-                    Script support (syd):
-                      syd list                 - list scripts in work_dir/scripts
-                      syd run <name>           - run script (name or name.syd)
-                      syd stop <script-id>     - stop running script (id returned on start)
-                      syd edit <name>          - open script for editing (if editor available)
-                      syd validate <name>      - validate syntax using ScriptHandler
-                      run <name>               - alias for 'syd run <name>'
+
+
+             .---.
+            /     \
+            \.@-@./
+            /`\_/`\
+           //  _  \\
+          | \     )|_
+         /`\_`>  <_/ \
+Hello!   \__/'---'\__/
+
+
+
                     """.trimIndent()
                 }
 
@@ -359,8 +303,8 @@ class Terminal {
                     null
                 }
  
-                    "tutorial" -> {
-                        val intent = Intent(ctx, SettingsActivity::class.java) // TODO: switch to TutorialActivity when available
+                    "tutorial", "help" -> {
+                        val intent = Intent(ctx, TutorialActivity::class.java) // TODO: switch to TutorialActivity when available
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         ctx.startActivity(intent)
                         null
@@ -771,7 +715,7 @@ class Terminal {
 }
 
 "gitclone" -> {
-    if (args.isEmpty()) return "Usage: gitclone <repo-url> [branch]"
+    if (args.isEmpty()) return "gitclone dont work."
     val repo = args[0]
     val branch = args.getOrNull(1) ?: "master"
     try {
@@ -2314,91 +2258,15 @@ private fun dnsLookup(name: String): String {
     }
 }
 
-// --- вспомогательные функции ---
-private fun normalizeRepoInput(raw: String): String {
-    return raw.trim().trim('<', '>')
-}
-
-private fun maybeConvertScpLikeUrl(s: String): String {
-    val trimmed = s.trim()
-    val scpLike = Regex("""^([^@:\s]+)@([^:]+):/?(.+)$""")
-    val m = scpLike.find(trimmed) ?: return trimmed
-    val host = m.groupValues[2]
-    var path = m.groupValues[3]
-    if (path.endsWith(".git")) path = path.removeSuffix(".git")
-    return "https://$host/${path.trimStart('/')}"
-}
-
-private fun ensureHasScheme(s: String): String {
-    val t = s.trim()
-    if (t.matches(Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://.*"))) return t
-    return "https://$t"
-}
-
-private fun isLikelyZipOrArchiveLink(s: String): Boolean {
-    val low = s.lowercase()
-    return low.endsWith(".zip") || low.contains("/archive/") || low.contains("/-/archive/")
-}
-
-/**
- * Build archive ZIP URL and safe filename for common hosts (GitHub, Codeberg, GitLab) and fallback.
- * Throws IllegalArgumentException on bad input.
- */
-private fun buildArchiveZipUrl(rawRepo: String, branch: String): Pair<String, String> {
-    val input = normalizeRepoInput(rawRepo)
-    if (isLikelyZipOrArchiveLink(input)) {
-        val url = if (input.startsWith("http", true)) input else ensureHasScheme(input)
-        val safe = url.trimEnd('/').substringAfterLast('/')
-        return Pair(url, safe)
-    }
-
-    val maybeHttps = maybeConvertScpLikeUrl(input)
-    val withScheme = ensureHasScheme(maybeHttps)
-
-    val u = try {
-        java.net.URL(withScheme)
-    } catch (e: Exception) {
-        throw IllegalArgumentException("Bad repo URL: $rawRepo")
-    }
-
-    val host = u.host.lowercase()
-    var path = u.path.trim().trim('/')
-    if (path.isEmpty()) throw IllegalArgumentException("Repo URL must include owner and project path: $rawRepo")
-    if (path.endsWith(".git")) path = path.removeSuffix(".git")
-    val project = path.substringAfterLast('/')
-    val scheme = u.protocol ?: "https"
-
-    val zipUrl = when {
-        host.contains("github.com") -> {
-            "$scheme://$host/$path/archive/refs/heads/${branch}"
-        }
-        host.contains("codeberg.org") -> {
-            "$scheme://$host/$path/archive/${branch}"
-        }
-        host.contains("gitlab.com") || host.contains("gitlab") -> {
-            "$scheme://$host/$path/-/archive/${branch}/${project}-${branch}.zip"
-        }
-        else -> {
-            "$scheme://$host/$path/archive/${branch}.zip"
-        }
-    }
-
-    val safeName = "${project}-${branch}.zip"
-    return Pair(zipUrl, safeName)
-}
-
-// --- Simple HTTP GET: returns headers + preview of body (first maxBodyChars chars) ---
+// Simple HTTP GET: returns headers + preview of body (first maxBodyChars chars)
 private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
     try {
-        val urlFixed = ensureHasScheme(urlStr)
-        val url = java.net.URL(urlFixed)
+        val url = java.net.URL(urlStr)
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 15_000
             instanceFollowRedirects = true
-            // optional: set a simple UA to avoid some servers rejecting requests
-            setRequestProperty("User-Agent", "android-terminal/1.0")
         }
         val code = conn.responseCode
         val sb = StringBuilder()
@@ -2406,7 +2274,7 @@ private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
         conn.headerFields.forEach { (k, v) ->
             if (k != null) sb.appendLine("$k: ${v?.joinToString(";")}")
         }
-        val inputStream = if (code >= 400) conn.errorStream else conn.inputStream
+        val inputStream = try { conn.inputStream } catch (_: Throwable) { conn.errorStream }
         val body = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
         val preview = if (body.length > maxBodyChars) body.substring(0, maxBodyChars) + "\n...[truncated]" else body
         if (preview.isNotBlank()) {
@@ -2418,61 +2286,49 @@ private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
         conn.disconnect()
         return sb.toString()
     } catch (t: Throwable) {
-        // пробрасываем исключение наружу — вызывающий код может логировать/обрабатывать
         throw t
     }
 }
 
-// --- Download arbitrary URL to work dir (DocumentFile). Returns true on success. ---
+// Download arbitrary URL to work dir (DocumentFile). Returns true on success.
 private fun downloadUrlToWork(ctx: Context, urlStr: String, filename: String): Boolean {
     val root = getRootDir(ctx) ?: return false
     val dest = root.createFile("application/octet-stream", filename) ?: return false
     return try {
-        val urlFixed = ensureHasScheme(urlStr)
-        val url = java.net.URL(urlFixed)
+        val url = java.net.URL(urlStr)
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 15_000
-            readTimeout = 30_000
+            connectTimeout = 15000
+            readTimeout = 30000
             instanceFollowRedirects = true
-            setRequestProperty("User-Agent", "android-terminal/1.0")
         }
-
-        val code = conn.responseCode
-        if (code >= 400) {
-            // optionally read error message for debugging/logging
-            conn.errorStream?.use { es ->
-                val errText = es.bufferedReader().use { it.readText() }
-                // можно логировать errText если нужно
-            }
-            conn.disconnect()
-            return false
-        }
-
         conn.inputStream.use { ins ->
             ctx.contentResolver.openOutputStream(dest.uri)?.use { out ->
                 ins.copyTo(out)
-            } ?: throw IllegalStateException("Cannot open output stream for ${dest.uri}")
+            } ?: throw IllegalStateException("Cannot open output stream")
         }
         conn.disconnect()
         true
     } catch (t: Throwable) {
-        // можно логировать t
         false
     }
 }
 
-// --- Simple gitclone-as-zip for supported hosts (GitHub, Codeberg, GitLab or direct zip URL).
-// Downloads zip to work dir; does NOT unpack. ---
+// Simple gitclone-as-zip for GitHub (or direct zip link). Downloads zip to work dir; does NOT unpack.
 private fun gitCloneAsZip(ctx: Context, repoUrl: String, branch: String?): String {
-    val br = branch ?: "master"
     return try {
-        val (zipUrl, safeName) = buildArchiveZipUrl(repoUrl, br)
+        val zipUrl = when {
+            repoUrl.contains("github.com") -> {
+                // example: https://github.com/user/repo -> https://github.com/user/repo/archive/refs/heads/<branch>.zip
+                repoUrl.trimEnd('/').let { "$it/archive/refs/heads/${branch ?: "master"}.zip" }
+            }
+            repoUrl.endsWith(".zip") -> repoUrl
+            else -> return "Unsupported repo host for automatic zip download (only GitHub or direct zip URLs supported)"
+        }
+        val safeName = repoUrl.trimEnd('/').substringAfterLast('/') + "-" + (branch ?: "master") + ".zip"
         val ok = downloadUrlToWork(ctx, zipUrl, safeName)
-        if (ok) "Downloaded $safeName to work dir (from $zipUrl)"
-        else "Download failed (check network/URL). Tried: $zipUrl"
-    } catch (iae: IllegalArgumentException) {
-        "Unsupported/invalid repo URL: ${iae.message}"
+        if (ok) "Downloaded $safeName to work dir"
+        else "Download failed (check network/URL)"
     } catch (t: Throwable) {
         "gitclone failed: ${t.message ?: "unknown"}"
     }
