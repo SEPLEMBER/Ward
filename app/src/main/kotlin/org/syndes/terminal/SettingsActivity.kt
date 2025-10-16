@@ -172,7 +172,7 @@ class SettingsActivity : AppCompatActivity() {
             val logs = tree.findFile("logs") ?: tree.createDirectory("logs")
             // также можно создать скрытую папку для внутренних метаданных
             val meta = tree.findFile(".syd_meta") ?: tree.createDirectory(".syd_meta")
-            val meta = tree.findFile(".syd_meta") ?: tree.createDirectory(".syd_meta")
+            val meta = tree.findFile(".syndes_trash") ?: tree.createDirectory(".syndes_trash")
             // no further action; creation is best-effort
         } catch (t: Throwable) {
             // молча игнорируем ошибки создания — не критично
