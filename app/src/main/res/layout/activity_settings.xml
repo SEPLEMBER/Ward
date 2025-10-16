@@ -49,41 +49,7 @@
                 android:fontFamily="monospace"/>
         </LinearLayout>
 
-        <!-- Theme -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="Theme"
-            android:fontFamily="monospace"
-            android:textColor="@color/terminal_text"
-            android:paddingTop="12dp"/>
-        <RadioGroup
-            android:id="@+id/themeGroup"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal">
-            <RadioButton
-                android:id="@+id/themeDark"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Dark"
-                android:fontFamily="monospace"
-                android:textColor="@color/terminal_text"/>
-            <RadioButton
-                android:id="@+id/themeLight"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Light"
-                android:fontFamily="monospace"
-                android:textColor="@color/terminal_text"/>
-            <RadioButton
-                android:id="@+id/themeAuto"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:text="Auto"
-                android:fontFamily="monospace"
-                android:textColor="@color/terminal_text"/>
-        </RadioGroup>
+        <!-- Theme removed -->
 
         <!-- Autoscroll -->
         <LinearLayout
