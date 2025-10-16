@@ -2314,15 +2314,91 @@ private fun dnsLookup(name: String): String {
     }
 }
 
-// Simple HTTP GET: returns headers + preview of body (first maxBodyChars chars)
+// --- вспомогательные функции ---
+private fun normalizeRepoInput(raw: String): String {
+    return raw.trim().trim('<', '>')
+}
+
+private fun maybeConvertScpLikeUrl(s: String): String {
+    val trimmed = s.trim()
+    val scpLike = Regex("""^([^@:\s]+)@([^:]+):/?(.+)$""")
+    val m = scpLike.find(trimmed) ?: return trimmed
+    val host = m.groupValues[2]
+    var path = m.groupValues[3]
+    if (path.endsWith(".git")) path = path.removeSuffix(".git")
+    return "https://$host/${path.trimStart('/')}"
+}
+
+private fun ensureHasScheme(s: String): String {
+    val t = s.trim()
+    if (t.matches(Regex("^[a-zA-Z][a-zA-Z0-9+.-]*://.*"))) return t
+    return "https://$t"
+}
+
+private fun isLikelyZipOrArchiveLink(s: String): Boolean {
+    val low = s.lowercase()
+    return low.endsWith(".zip") || low.contains("/archive/") || low.contains("/-/archive/")
+}
+
+/**
+ * Build archive ZIP URL and safe filename for common hosts (GitHub, Codeberg, GitLab) and fallback.
+ * Throws IllegalArgumentException on bad input.
+ */
+private fun buildArchiveZipUrl(rawRepo: String, branch: String): Pair<String, String> {
+    val input = normalizeRepoInput(rawRepo)
+    if (isLikelyZipOrArchiveLink(input)) {
+        val url = if (input.startsWith("http", true)) input else ensureHasScheme(input)
+        val safe = url.trimEnd('/').substringAfterLast('/')
+        return Pair(url, safe)
+    }
+
+    val maybeHttps = maybeConvertScpLikeUrl(input)
+    val withScheme = ensureHasScheme(maybeHttps)
+
+    val u = try {
+        java.net.URL(withScheme)
+    } catch (e: Exception) {
+        throw IllegalArgumentException("Bad repo URL: $rawRepo")
+    }
+
+    val host = u.host.lowercase()
+    var path = u.path.trim().trim('/')
+    if (path.isEmpty()) throw IllegalArgumentException("Repo URL must include owner and project path: $rawRepo")
+    if (path.endsWith(".git")) path = path.removeSuffix(".git")
+    val project = path.substringAfterLast('/')
+    val scheme = u.protocol ?: "https"
+
+    val zipUrl = when {
+        host.contains("github.com") -> {
+            "$scheme://$host/$path/archive/refs/heads/${branch}"
+        }
+        host.contains("codeberg.org") -> {
+            "$scheme://$host/$path/archive/${branch}"
+        }
+        host.contains("gitlab.com") || host.contains("gitlab") -> {
+            "$scheme://$host/$path/-/archive/${branch}/${project}-${branch}.zip"
+        }
+        else -> {
+            "$scheme://$host/$path/archive/${branch}.zip"
+        }
+    }
+
+    val safeName = "${project}-${branch}.zip"
+    return Pair(zipUrl, safeName)
+}
+
+// --- Simple HTTP GET: returns headers + preview of body (first maxBodyChars chars) ---
 private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
     try {
-        val url = java.net.URL(urlStr)
+        val urlFixed = ensureHasScheme(urlStr)
+        val url = java.net.URL(urlFixed)
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "GET"
             connectTimeout = 15_000
             readTimeout = 15_000
             instanceFollowRedirects = true
+            // optional: set a simple UA to avoid some servers rejecting requests
+            setRequestProperty("User-Agent", "android-terminal/1.0")
         }
         val code = conn.responseCode
         val sb = StringBuilder()
@@ -2330,7 +2406,7 @@ private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
         conn.headerFields.forEach { (k, v) ->
             if (k != null) sb.appendLine("$k: ${v?.joinToString(";")}")
         }
-        val inputStream = try { conn.inputStream } catch (_: Throwable) { conn.errorStream }
+        val inputStream = if (code >= 400) conn.errorStream else conn.inputStream
         val body = inputStream?.bufferedReader()?.use { it.readText() } ?: ""
         val preview = if (body.length > maxBodyChars) body.substring(0, maxBodyChars) + "\n...[truncated]" else body
         if (preview.isNotBlank()) {
@@ -2342,49 +2418,61 @@ private fun httpGet(urlStr: String, maxBodyChars: Int = 4096): String {
         conn.disconnect()
         return sb.toString()
     } catch (t: Throwable) {
+        // пробрасываем исключение наружу — вызывающий код может логировать/обрабатывать
         throw t
     }
 }
 
-// Download arbitrary URL to work dir (DocumentFile). Returns true on success.
+// --- Download arbitrary URL to work dir (DocumentFile). Returns true on success. ---
 private fun downloadUrlToWork(ctx: Context, urlStr: String, filename: String): Boolean {
     val root = getRootDir(ctx) ?: return false
     val dest = root.createFile("application/octet-stream", filename) ?: return false
     return try {
-        val url = java.net.URL(urlStr)
+        val urlFixed = ensureHasScheme(urlStr)
+        val url = java.net.URL(urlFixed)
         val conn = (url.openConnection() as java.net.HttpURLConnection).apply {
             requestMethod = "GET"
-            connectTimeout = 15000
-            readTimeout = 30000
+            connectTimeout = 15_000
+            readTimeout = 30_000
             instanceFollowRedirects = true
+            setRequestProperty("User-Agent", "android-terminal/1.0")
         }
+
+        val code = conn.responseCode
+        if (code >= 400) {
+            // optionally read error message for debugging/logging
+            conn.errorStream?.use { es ->
+                val errText = es.bufferedReader().use { it.readText() }
+                // можно логировать errText если нужно
+            }
+            conn.disconnect()
+            return false
+        }
+
         conn.inputStream.use { ins ->
             ctx.contentResolver.openOutputStream(dest.uri)?.use { out ->
                 ins.copyTo(out)
-            } ?: throw IllegalStateException("Cannot open output stream")
+            } ?: throw IllegalStateException("Cannot open output stream for ${dest.uri}")
         }
         conn.disconnect()
         true
     } catch (t: Throwable) {
+        // можно логировать t
         false
     }
 }
 
-// Simple gitclone-as-zip for GitHub (or direct zip link). Downloads zip to work dir; does NOT unpack.
+// --- Simple gitclone-as-zip for supported hosts (GitHub, Codeberg, GitLab or direct zip URL).
+// Downloads zip to work dir; does NOT unpack. ---
 private fun gitCloneAsZip(ctx: Context, repoUrl: String, branch: String?): String {
+    val br = branch ?: "master"
     return try {
-        val zipUrl = when {
-            repoUrl.contains("github.com") -> {
-                // example: https://github.com/user/repo -> https://github.com/user/repo/archive/refs/heads/<branch>.zip
-                repoUrl.trimEnd('/').let { "$it/archive/refs/heads/${branch ?: "master"}.zip" }
-            }
-            repoUrl.endsWith(".zip") -> repoUrl
-            else -> return "Unsupported repo host for automatic zip download (only GitHub or direct zip URLs supported)"
-        }
-        val safeName = repoUrl.trimEnd('/').substringAfterLast('/') + "-" + (branch ?: "master") + ".zip"
+        val (zipUrl, safeName) = buildArchiveZipUrl(repoUrl, br)
         val ok = downloadUrlToWork(ctx, zipUrl, safeName)
-        if (ok) "Downloaded $safeName to work dir"
-        else "Download failed (check network/URL)"
+        if (ok) "Downloaded $safeName to work dir (from $zipUrl)"
+        else "Download failed (check network/URL). Tried: $zipUrl"
+    } catch (iae: IllegalArgumentException) {
+        "Unsupported/invalid repo URL: ${iae.message}"
     } catch (t: Throwable) {
         "gitclone failed: ${t.message ?: "unknown"}"
     }
