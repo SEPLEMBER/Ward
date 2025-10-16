@@ -42,7 +42,12 @@
             android:exported="false"
             android:theme="@style/AppTheme.Transparent" />
 
-        <!-- foreground-сервис для watchdog -->
+            <activity
+            android:name=".TutorialActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.Transparent" />
+        
+        <!-- foreground-service for watchdog -->
         <service
             android:name=".WatchdogService"
             android:enabled="true"
