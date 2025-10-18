@@ -1,4 +1,4 @@
-package com.example.resetup
+package org.syndes.terminal
 
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,7 +11,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.ActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.app.AppCompatActivity 
 
 class ResetupActivity : AppCompatActivity() {
 
