@@ -111,91 +111,7 @@ Hello!   \__/'---'\__/
                     "Info: set wait for $secs s"
                 }
 
-                // -------------------------
-                // Script commands: syd / run
-                // -------------------------
-                "syd", "script" -> {
-                    val sub = args.getOrNull(0)?.lowercase()
-                    if (sub == null) return "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
-                    when (sub) {
-                        "list" -> {
-                            val root = getRootDir(ctx) ?: return "Error: work folder not set."
-                            val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
-                            val files = scriptsDir.listFiles().filter { it.isFile }
-                            if (files.isEmpty()) "No scripts found in ${scriptsDir.name ?: "work dir"}"
-                            else files.joinToString("\n") { it.name ?: "?" }
-                        }
-                        "run" -> {
-                            val name = args.drop(1).joinToString(" ").trim()
-                            if (name.isEmpty()) return "Usage: syd run <scriptname>"
-                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found in work_dir/scripts or work root"
-                            return try {
-                                ScriptHandler.startScriptFromUri(ctx, scriptDoc.uri)
-                            } catch (t: Throwable) {
-                                "Error: failed to start script: ${t.message ?: "unknown"}"
-                            }
-                        }
-                        "stop" -> {
-                            val id = args.getOrNull(1) ?: return "Usage: syd stop <script-id>"
-                            return try {
-                                ScriptHandler.stopScript(id)
-                            } catch (t: Throwable) {
-                                "Error: failed to stop script: ${t.message ?: "unknown"}"
-                            }
-                        }
-                        "edit" -> {
-                            val name = args.drop(1).joinToString(" ").trim()
-                            if (name.isEmpty()) return "Usage: syd edit <scriptname>"
-                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
-                            return try {
-                                val editIntent = Intent(Intent.ACTION_EDIT).apply {
-                                    setDataAndType(scriptDoc.uri, "text/plain")
-                                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                                    if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                val pm = ctx.packageManager
-                                val resolves = pm.queryIntentActivities(editIntent, PackageManager.MATCH_DEFAULT_ONLY)
-                                if (resolves.isNotEmpty()) {
-                                    ctx.startActivity(editIntent)
-                                } else {
-                                    val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-                                        setDataAndType(scriptDoc.uri, "text/plain")
-                                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
-                                        if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                    }
-                                    ctx.startActivity(viewIntent)
-                                }
-                                "Info: opened editor for ${scriptDoc.name}"
-                            } catch (t: Throwable) {
-                                "Error: cannot open editor for ${scriptDoc.name}"
-                            }
-                        }
-                        "validate" -> {
-                            val name = args.drop(1).joinToString(" ").trim()
-                            if (name.isEmpty()) return "Usage: syd validate <scriptname>"
-                            val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
-                            val content = try { ctx.contentResolver.openInputStream(scriptDoc.uri)?.bufferedReader()?.use { it.readText() } } catch (_: Throwable) { null }
-                            if (content == null) return "Error: cannot read script"
-                            return try {
-                                ScriptHandler.validateScriptText(ctx, content)
-                            } catch (t: Throwable) {
-                                "Error: validation failed: ${t.message ?: "unknown"}"
-                            }
-                        }
-                        else -> "Usage: syd list|run <name>|stop <id>|edit <name>|validate <name>"
-                    }
-                }
 
-                "run" -> {
-                    val name = args.joinToString(" ").trim()
-                    if (name.isEmpty()) return "Usage: run <scriptname>"
-                    val scriptDoc = findScriptFile(ctx, name) ?: return "Error: script '$name' not found"
-                    return try {
-                        ScriptHandler.startScriptFromUri(ctx, scriptDoc.uri)
-                    } catch (t: Throwable) {
-                        "Error: failed to start script: ${t.message ?: "unknown"}"
-                    }
-                }
 
                 // -------------------------
                 // Basic commands (files / apps / utils)
@@ -475,27 +391,6 @@ Hello!   \__/'---'\__/
         sb.toString()
     } catch (t: Throwable) {
         "Error: cannot get package info: ${t.message}"
-    }
-}
-
-"which" -> {
-    if (args.isEmpty()) return "Usage: which <command>"
-    val cmd = args[0].lowercase()
-    val knownCommands = setOf(
-        "help","about","echo","open","launch","history","clear","settings","console","clearwork",
-        "ls","dir","cd","pwd","cp","mv","rm","mkdir","touch","cat","ln","wc","head","tail","du","stat","find",
-        "pm","date","whoami","uname","uptime","which","alias","unalias","env",
-        "sms","call","email","browser","search","contacts","alarm","calc",
-        "vpns","btss","wifi","bts","data","apm","snd","dsp","apps","stg","sec","loc","nfc","cam","clk",
-        "notif","acc","dev","syd","run","mem","device","cmp","diff","replace","rename","backup","snapshot",
-        "trash","cleartrash","sha256","md5","pminfo","type","pkgof","matrix"
-    )
-    if (aliasesStr.split(";").any { it.split("=")[0].trim().lowercase() == cmd }) return "$cmd: alias"
-    // check built-ins quickly
-    if (listOf("help","about","echo","open","launch","history","clear","settings","ls","cd","pwd","cp","mv","rm","mkdir","touch","cat","wc","head","tail","du","stat","find","pm","date","uname","uptime","alias","unalias","env","sms","browser","search","mem","device","cmp","diff","replace","rename","backup","snapshot","trash","cleartrash","sha256","md5","pminfo","which","type","pkgof").contains(cmd)) {
-        "$cmd: built-in command"
-    } else {
-        "$cmd: not found"
     }
 }
 
@@ -1534,22 +1429,6 @@ Hello!   \__/'---'\__/
                     "$days days, $hours:$minutes:$seconds"
                 }
 
-                "which" -> {
-                    if (args.isEmpty()) return "Error: which <command>"
-                    val cmd = args[0].lowercase()
-                    val knownCommands = listOf("help", "about", "echo", "open", "launch", "history", "clear", "settings", "console", "clearwork",
-                        "ls", "dir", "cd", "pwd", "cp", "mv", "rm", "mkdir", "touch", "cat", "ln", "wc", "head", "tail", "du", "stat", "find",
-                        "pm", "date", "whoami", "uname", "uptime", "which", "alias", "unalias", "env",
-                        "sms", "call", "email", "browser", "search", "contacts", "alarm", "calc",
-                        "vpns", "btss", "wifi", "bts", "data", "apm", "snd", "dsp", "apps", "stg", "sec", "loc", "nfc", "cam", "clk",
-                        "notif", "acc", "dev", "syd", "run", "mem", "device", "cmp", "diff", "replace", "rename", "encrypt", "decrypt", "matrix")
-                    if (knownCommands.contains(cmd)) {
-                        "$cmd: built-in command"
-                    } else {
-                        "$cmd: not found"
-                    }
-                }
-
                 "vpns" -> {
                     val intent = Intent(Settings.ACTION_VPN_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -1905,48 +1784,6 @@ Hello!   \__/'---'\__/
             "Error: ${t.message ?: "execution failed"}"
         }
     }
-
-    // ---------------------------
-// Helpers for script discovery & replace & encrypt
-// ---------------------------
-private fun findScriptFile(ctx: Context, name: String): DocumentFile? {
-    val root = getRootDir(ctx) ?: return null
-    val scriptsDir = root.findFile("scripts")?.takeIf { it.isDirectory } ?: root
-
-    if (name.contains("/")) {
-        val full = resolvePath(ctx, name)
-        if (full != null) {
-            val (parent, fileName) = full
-            val f = parent.findFile(fileName)
-            if (f != null && f.isFile) return f
-        }
-    }
-
-    val candidates = mutableListOf<String>()
-    if (name.contains('.')) {
-        candidates.add(name)
-    } else {
-        listOf(".syd", ".cyd", ".sydscrypt", ".txt").forEach { ext ->
-            candidates.add("$name$ext")
-        }
-        candidates.add(name)
-    }
-
-    for (cand in candidates) {
-        val f = scriptsDir.findFile(cand)
-        if (f != null && f.isFile) return f
-    }
-
-    for (cand in candidates) {
-        val f = root.findFile(cand)
-        if (f != null && f.isFile) return f
-    }
-
-    val match = scriptsDir.listFiles().firstOrNull { it.name?.lowercase()?.contains(name.lowercase()) == true }
-    if (match != null && match.isFile) return match
-
-    return null
-}
 
 // Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
 private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
