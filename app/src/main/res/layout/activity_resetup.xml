@@ -48,7 +48,6 @@
             android:padding="12dp"
             android:typeface="monospace"
             android:textColor="#EEEEEE"
-            android:hintTextColor="#555555"
             android:background="#000000"
             android:scrollbars="vertical"
             android:cursorVisible="true" />
