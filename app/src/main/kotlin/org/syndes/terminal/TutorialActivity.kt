@@ -1,6 +1,7 @@
 package org.syndes.terminal
 
 import android.graphics.Color
+import android.graphics.Typeface
 import android.os.Bundle
 import android.text.Spannable
 import android.text.SpannableStringBuilder
@@ -15,6 +16,12 @@ class TutorialActivity : AppCompatActivity() {
         setContentView(R.layout.activity_tutorial)
 
         val tv: TextView = findViewById(R.id.tutorial_text)
+        // monospace for terminal feel
+        tv.typeface = Typeface.MONOSPACE
+        // subtle neon glow
+        val neonCyan = Color.parseColor("#00FFF0")
+        applyNeon(tv, neonCyan, radius = 4f)
+
         tv.setText(buildHighlightedCommands(), TextView.BufferType.SPANNABLE)
     }
 
@@ -26,116 +33,139 @@ class TutorialActivity : AppCompatActivity() {
         val colorNeonCyan = Color.parseColor("#00FFF0") // neon cyan
         val colorDefault = Color.parseColor("#E0E0E0")
 
+        // Organized categories (A..E). Commands in each category are alphabetically sorted.
         val raw = """
 Available commands:
-  about           - app info/version
-  echo <text>     - print text (supports > file for redirect)
-  open <app|file> - launch app by visible name (e.g. open Minecraft) or open file in associated app (e.g. open file.txt)
-  launch <app>    - explicitly launch app (alias to open-app)
-  history         - show input history
-  clear           - clear terminal history (internal)
-  settings|console - open settings screen
-  ls|dir          - list files in current directory
-  cd <dir>        - change directory (supports .., relative paths, 'home')
-  pwd             - print working directory path
-  cp <src> <dst>  - copy file/dir (supports relative paths)
-  mv <src> <dst>  - move file/dir (supports relative paths)
-  rm [-r] <file>  - remove file or dir (recursive with -r, supports paths)
-  mkdir <name>    - create directory (supports paths)
-  touch <name>    - create empty file (supports paths)
-  cat <file>      - display file contents (supports paths)
-  ln <src> <link> - create pseudo-link (copy) of file (supports paths)
-  wc <file>       - word count: lines, words, chars (supports paths)
-  head <file> [n] - show first n lines (default 10, supports paths)
-  tail <file> [n] - show last n lines (default 10, supports paths)
-  du <file|dir>   - show size in bytes (recursive for dirs, supports paths)
-  stat <path>     - show file/dir stats (size, type, modified)
-  find <name>     - find files by name in current dir
-  cmp <f1> <f2>   - compare two text files (line-by-line)
-  diff [-u] [-c <lines>] [-i] <f1> <f2> - show differences with line numbers (supports unified format, context lines, ignore case)
-  replace <old> <new> <path> - replace text in file or recursively in directory
-  rename <old> <new> <path> - rename filenames in dir (substring replace; use {} in new for counter)
-  encrypt <password> <path> - encrypt text files (recursively if dir)
-  decrypt <password> <path> - decrypt text files (recursively if dir)
-  
+
+==A: Apps & Package manager==
+  about                - show app information and version
+  alias <name>=<cmd>   - define alias (alias names cannot contain spaces)
+  alias list           - list defined aliases
+  alias run <name>     - run alias by name
+  apps                 - open application settings screen
+  launch <app>         - launch an app by name (alias of open for apps)
+  pm install <apk>     - install APK from current work directory (SAF paths supported)
+  pm launch <pkg|app>  - launch package or app by package name or visible app name
+  pm list [user|system]- list installed packages; optional filter 'user' or 'system'
+  pm uninstall <pkg>   - uninstall package (starts system uninstall flow)
+  pminfo|pkginfo <pkg> - show package information (package or app visible name)
+  pkgof|findpkg <app>  - find package name(s) by visible app name
+  resetup              - open batch uninstall utility (batch remove apps)
+  runsyd <name>        - load and inject script from SAF root 'scripts' folder (tries .syd, .sh, .txt)
+
+==B: Files & File system operations==
+  apm                  - open airplane mode settings (shortcut)
+  cat <file>           - display file contents (supports SAF/relative paths)
+  checksum <file> [md5|sha256] - compute file hash (default sha256)
+  cmp <f1> <f2>        - compare two text files (line-by-line)
+  cp <src> <dst>       - copy file or directory (supports relative paths)
+  cd - change directory
+  cut -d<delim> -f<fields> <file> - extract fields from file by delimiter
+  du <file|dir>        - show size in bytes (recursive for directories)
+  encrypt <password> <path> - encrypt files (recursively if directory)
+  decrypt <password> <path> - decrypt files (recursively if directory)
+  filekey|apkkey <apk> - show APK signatures/certificates
+  find <name>          - find files by name in current directory (non-recursive by default)
+  head <file> [n]      - show first n lines (default 10)
+  join|merge <file1> <file2> [sep] - join files line-by-line
+  ln <src> <link>      - create pseudo-link (copy) of file
+  ls|dir               - list files in current directory
+  mkdir <name>         - create directory (supports paths)
+  mv <src> <dst>       - move file or directory (supports relative paths)
+  preview <path> [lines] - preview file content (text or image metadata)
+  replace <old> <new> <path> - replace text in files or recursively in dirs
+  rename <old> <new> <path> - rename filenames in directory (substring replace; supports { } counter)
+  rev <file> [--inplace] - reverse line order in file
+  rm [-r] <path>       - remove file or directory (-r for recursive)
+  rmdir (use rm)       - (note) prefer rm for recursive removes
+  split <file> <lines_per_file> [prefix] - split file into parts by lines
+  stat <path>          - show file/directory stats (size, type, modified)
+  stash/trash <path>   - move file/dir to trash (.syndes_trash)
+  cleartrash           - clear trash directory
+  touch <name>         - create empty file (supports paths)
+  trash <path>         - move file/dir to trash (.syndes_trash)
+  unzip <archive> [dest] - extract ZIP archive
+  zip <source> <archive> - create ZIP archive
+
+==C: System & Information==
+  date                 - show current date and time
+  device               - show device information (model, brand, etc.)
+  mem [pkg]            - show memory usage info (system or specific package)
+  ps|top               - show running processes (ps) or top-like summary
+  sha256|md5 <path>    - compute file hash (shortcut)
+  sysclipboard get|set <text> - get or set system clipboard contents
+  uname                - show system name/version information
+  uptime               - show system uptime
+  sleep <min>/<ms>/<sec> - wait before run command
+  wait <sec> - block commands for given seconds (persist until timeout)
+  whoami               - show current user (or environment identity)
+
+==D: Utilities & Text tools==
+  backup|snapshot <path> - create backup of file/dir with SydBack (if available)
+  batchren <dir> <pattern> - batch rename files in directory
+  batchedit <old> <new> <dir> [--dry] - batch replace text in files
+  calc                 - open calculator app
+  cat                  - (see Files) display file contents
+  cmp                  - (see Files) compare files
+  diff [-u] [-c <n>] [-i] <f1> <f2> - show textual differences with options (unified/context/ignore-case)
+  grep [-r] [-i] [-l] [-n] <pattern> <path> - search text in files (recursive, ignore case, names only, show line numbers)
+  head                 - (see Files)
+  hash utilities       - use checksum/sha256/md5 commands for hashing
+  rev                  - reverse file lines
+  sort-lines <file> [--unique] [--reverse] [--inplace] - sort lines in file
+  split                - (see Files)
+  tail <file> [n]      - show last n lines (default 10)
+  wc <file>            - word count: lines, words, chars
+
+==E: Settings, Shortcuts & Apps shortcuts==
+  acc                  - open account settings
+  alarm                - open alarm app
+  apm                  - open airplane mode settings
+  btss                 - open battery saver settings
+  bts                  - open Bluetooth settings
+  cam                  - open camera app
+  clk                  - open date/time settings
+  contacts             - open contacts app
+  data                 - open mobile data settings
+  dev                  - open developer settings
+  dsp                  - open display settings
+  loc                  - open location settings
+  nfc                  - open NFC settings
+  notif                - open notification settings
+  sec                  - open security/app details
+  snd                  - open sound settings
+  stg                  - open storage settings
+  vpns                 - open VPN settings
+  wifi                 - open Wi-Fi settings
+  browser [url]        - open browser with optional URL
+  call <number>        - open dialer with number
+  email [addr] [subj] [body] - open email composer
+  notify -t <title> -m <message> - send system notification
+  search <query>       - perform web search (opens browser)
+  sms [number] [text]  - open SMS app with optional number/text
+
+==F: Shell control, aliases & app flow==
+  clear                - clear terminal output (internal)
+  exit                 - shut down the application
+  history              - show input history
+  help                 - show this help / tutorial
+  alias                - (see A: alias commands)
+  unalias <name>       - remove alias
+
+==G: Misc / Notes & Warnings==
   !!! WARNING (ENCRYPT): encrypting large folders is CPU-intensive.
   Please encrypt small folders or specific directories one-by-one.
   Iterations = 1000 (LOW). This provides only limited KDF hardness.
-  Use a strong password — recommendation: minimum **8 different characters** (no enforcement).
-   (Encryption here is a convenience/bonus — responsibility for secure passwords is on the user.)
-  
-  wait <seconds>  - block commands for given seconds (persist until timeout)
-  pm list [user|system] - list installed packages (all or filtered)
-  pm install <apk> - install APK from work dir (supports paths)
-  pm uninstall <pkg|appname> - uninstall package or app by name
-  pm launch <pkg|appname> - launch package or app by name
-  date            - show current date/time
-  whoami          - show user info
-  uname           - show system info
-  uptime          - show system uptime
-  which <cmd>     - check if command exists
-  alias <name>=<command> - set alias
-  alias list      - list aliases
-  alias run <name> - run alias
-  unalias <name>  - remove alias
-  env             - show environment vars
-  sms [number] [text] - open SMS app (with number and text)
-  call <number>   - dial number
-  email [address] [subject] [body] - open email app (with address, subject, body)
-  browser [url]   - open browser (with URL)
-  search <query>  - web search query
-  contacts        - open contacts app
-  alarm           - open alarm app
-  calc            - open calculator app
-  vpns            - open VPN settings
-  btss            - open battery saver settings
-  wifi            - open Wi-Fi settings
-  bts             - open Bluetooth settings
-  data            - open mobile data settings
-  apm             - open airplane mode settings
-  snd             - open sound settings
-  dsp             - open display settings
-  apps            - open app settings
-  stg             - open storage settings
-  sec             - open security/app details
-  loc             - open location settings
-  nfc             - open NFC settings
-  cam             - open camera
-  clk             - open date/time settings
-  notif           - open notification settings
-  acc             - open account settings
-  dev             - open developer settings
-  exit            - shut down the application
-  backup|snapshot <path> - create backup of file/dir in SydBack
-  batchren <dir> <newPattern> - batch rename files in directory
-  trash <path>    - move file/dir to trash (.syndes_trash)
-  cleartrash      - clear trash directory
-  sha256|md5 <path> - compute file hash (SHA-256 or MD5)
-  pminfo|pkginfo <package|appname> - show package information
-  type <path>     - show file/dir type and metadata
-  pkgof|findpkg <appname> - find package name by app name
-  batchedit <old> <new> <dir> [--dry] - batch replace text in files
-  ps|top          - show running processes
-  sysclipboard get|set <text> - get/set system clipboard content
-  preview <path> [lines] - preview file content (text or image metadata)
-  filekey|apkkey <apk_path> - show APK signatures/certificates
-  ping <host> [count] - ping a host
-  dns <name>      - perform DNS lookup
-  curl|fetch <url> - perform HTTP GET request
-  grep [-r] [-i] [-l] [-n] <pattern> <path> - search text in files (recursive, ignore case, names only, line numbers)
-  zip <source> <archive> - create ZIP archive
-  unzip <archive> [dest] - extract ZIP archive
-  logcat [-t tag] [-l level] [-n lines] - view system logs
-  notify -t <title> -m <message> - send system notification
-  split <file> <lines_per_file> [prefix] - split file into parts by lines
-  checksum <file> [md5|sha256] - compute file hash
-  rev <file> [--inplace] - reverse line order in file
-  cut -d<delim> -f<fields> <file> - extract fields from file by delimiter
-  join|merge <file1> <file2> [sep] - join files line-by-line
-  sort-lines <file> [--unique] [--reverse] [--inplace] - sort lines in file
-  dup-lines|duplicate-lines|dup-lines-in-file <file> [--count] [--show-only-duplicates] - show/count duplicate lines
-  mem [pkg]       - show memory info (system or package)
-  device          - show device information
+  Use a strong password — recommendation: minimum 8 different characters.
+  (Encryption is a convenience feature; responsibility for secure passwords lies with the user.)
+
+Notes:
+  - runsyd reads scripts from SAF root → 'scripts' directory (tries name.syd, name.sh, name.txt).
+  - pm uninstall starts system uninstall flow (user must confirm each uninstall dialog).
+  - resetup opens UI that iterates package list and launches system uninstall dialogs one-by-one.
+  - many file operations support SAF paths or relative paths from the configured work directory.
+  - aliases are local to the app and do not affect the system shell.
+
 """.trimIndent()
 
         val sb = SpannableStringBuilder(raw)
@@ -174,17 +204,12 @@ Available commands:
             val sepIndexInLine = line.indexOf(" - ")
             val commandPartEnd = if (sepIndexInLine >= 0) lineStart + sepIndexInLine else lineEnd
 
-            // If line starts with two spaces and then text like "about", parse command tokens until spacing cluster
-            // we'll color the left-side (command part) tokens blue
-            if (line.trim().isNotEmpty() && line.trimStart().length != 0) {
+            if (line.trim().isNotEmpty()) {
                 // color command part (left of " - ") in blue (only if it's not description/warning block)
                 if (commandPartEnd > lineStart) {
-                    // color token characters that look like command names / aliases (letters, numbers, |, |)
-                    // we'll simply color the whole left part blue, then override args/flags inside it as green
                     sb.setSpan(ForegroundColorSpan(colorCommand), lineStart, commandPartEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
 
                     // inside left part, highlight <...> and -flags as green
-                    // find all occurrences of <...>
                     val leftPart = line.substring(0, if (sepIndexInLine >= 0) sepIndexInLine else line.length)
                     var relIndex = 0
                     while (true) {
@@ -197,7 +222,6 @@ Available commands:
                         sb.setSpan(ForegroundColorSpan(colorArg), absStart, absEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                         relIndex = gt + 1
                     }
-                    // flags like -r or [-r]
                     val flagRegex = Regex("""\B-[-\w\[\]]+""")
                     flagRegex.findAll(leftPart).forEach { m ->
                         val absStart = lineStart + m.range.first
@@ -205,11 +229,8 @@ Available commands:
                         sb.setSpan(ForegroundColorSpan(colorArg), absStart, absEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                     }
                 } else {
-                    // for lines without " - " we can still highlight commands that start after indentation
-                    // find first non-space in line
                     val firstNonSpace = line.indexOfFirst { !it.isWhitespace() }
                     if (firstNonSpace >= 0) {
-                        // color the first token up to space in blue
                         val tokenEndInLine = line.indexOfFirst { it.isWhitespace() }.let { if (it < 0) line.length else it }
                         val absStart = lineStart + firstNonSpace
                         val absEnd = lineStart + tokenEndInLine
@@ -220,11 +241,10 @@ Available commands:
                 }
             }
 
-            // ALSO: in the description (right of " - "), highlight <...> and flags in green as well
+            // description part highlight (<...> and flags)
             if (sepIndexInLine >= 0) {
                 val descStart = lineStart + sepIndexInLine + 3 // after " - "
                 val descText = line.substring(sepIndexInLine + 3)
-                // args in <>
                 var relIndex = 0
                 while (true) {
                     val lt = descText.indexOf('<', relIndex)
@@ -236,7 +256,6 @@ Available commands:
                     sb.setSpan(ForegroundColorSpan(colorArg), absStart, absEnd, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
                     relIndex = gt + 1
                 }
-                // flags -r etc.
                 val flagRegex = Regex("""\B-[-\w\[\]]+""")
                 flagRegex.findAll(descText).forEach { m ->
                     val absStart = descStart + m.range.first
@@ -249,9 +268,15 @@ Available commands:
             offset += line.length + 1
         }
 
-        // final: make sure the default text color is applied to non-colored parts (TextView default already does),
-        // but we can optionally set entire area to default before overlays (we already used spans only where needed).
-
         return sb
+    }
+
+    // subtle neon glow helper
+    private fun applyNeon(tv: TextView, color: Int, radius: Float = 4f, dx: Float = 0f, dy: Float = 0f) {
+        try {
+            tv.setShadowLayer(radius, dx, dy, color)
+        } catch (_: Throwable) {
+            // defensive: some devices could behave differently; ignore failure
+        }
     }
 }
