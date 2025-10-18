@@ -134,6 +134,21 @@ class MainActivity : AppCompatActivity() {
         sendButton.setTextColor(embeddedYellow)
         sendButton.setBackgroundColor(Color.TRANSPARENT)
 
+        // --- Apply subtle neon/glow effects (safe presets) ---
+        // terminal output: cyan-ish glow (subtle)
+        val neonCyan = Color.parseColor("#00FFF7")
+        applyNeon(terminalOutput, neonCyan, radius = 6f)
+
+        // progress text: warm yellow glow
+        applyNeon(progressText, embeddedYellow, radius = 5f)
+
+        // send button: keep its yellow text and add small glow
+        applyNeon(sendButton, embeddedYellow, radius = 6f)
+
+        // input field: small subtle greenish glow so caret/text pop
+        val subtleGreen = Color.parseColor("#39FF14")
+        applyNeon(inputField, subtleGreen, radius = 3f)
+
         // Добавляем кнопку "STOP QUEUE" программно (без изменения XML)
         addStopQueueButton()
 
@@ -223,7 +238,7 @@ class MainActivity : AppCompatActivity() {
         // Парсим ввод в список CommandItem
         val items = parseInputToCommandItems(rawInput)
 
-        // Добавляем элементы в очередь и печатаем в терминал
+        // Добавляем элементы в очеред и печатаем в терминал
         for (item in items) {
             when (item) {
                 is CommandItem.Single -> {
@@ -256,6 +271,9 @@ class MainActivity : AppCompatActivity() {
                 setOnClickListener { stopQueue() }
                 visibility = View.GONE // hidden by default
             }
+            // add neon glow to the created button (safe preset)
+            applyNeon(btn, Color.parseColor("#FF5F1F"), radius = 6f)
+
             stopQueueButton = btn
 
             // Try to add before sendButton so STOP is left, RUN is right
@@ -937,6 +955,16 @@ class MainActivity : AppCompatActivity() {
             val layout = terminalOutput.layout ?: return@post
             val scrollAmount = layout.getLineTop(terminalOutput.lineCount) - terminalOutput.height
             if (scrollAmount > 0) terminalOutput.scrollTo(0, scrollAmount) else terminalOutput.scrollTo(0, 0)
+        }
+    }
+
+    // Helper: apply a subtle neon glow using setShadowLayer (safe defaults chosen)
+    private fun applyNeon(view: TextView, color: Int, radius: Float = 6f, dx: Float = 0f, dy: Float = 0f) {
+        try {
+            view.setShadowLayer(radius, dx, dy, color)
+            // do not override text color here; caller already sets text color where needed
+        } catch (_: Throwable) {
+            // ignore devices that might fail; setShadowLayer is widely supported but be defensive
         }
     }
 
