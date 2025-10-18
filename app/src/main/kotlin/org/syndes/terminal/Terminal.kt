@@ -310,6 +310,13 @@ Hello!   \__/'---'\__/
                         null
                     }
 
+                    "resetup", "batch uninstall" -> {
+                        val intent = Intent(ctx, ResetupActivity::class.java) // TODO: switch to TutorialActivity when available
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    }
+
                       "exit" -> {
                           // spawn thread to shutdown after a short delay to allow UI to render the message
                           Thread {
