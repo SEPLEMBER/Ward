@@ -46,6 +46,11 @@
             android:name=".TutorialActivity"
             android:exported="false"
             android:theme="@style/AppTheme.Transparent" />
+
+                    <activity
+            android:name=".ResetupActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme.Transparent" />
         
         <!-- foreground-service for watchdog -->
         <service
