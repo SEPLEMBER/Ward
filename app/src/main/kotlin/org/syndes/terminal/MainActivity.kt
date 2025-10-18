@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.text.SpannableStringBuilder
@@ -15,6 +16,7 @@ import android.text.method.ScrollingMovementMethod
 import android.text.style.ForegroundColorSpan
 import android.view.Gravity
 import android.view.KeyEvent
+import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
@@ -28,6 +30,7 @@ import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CancellationException
@@ -38,6 +41,8 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
 import java.util.ArrayDeque
 
 class MainActivity : AppCompatActivity() {
@@ -248,32 +253,31 @@ class MainActivity : AppCompatActivity() {
                 setTextColor(Color.parseColor("#FF5F1F"))
                 setBackgroundColor(Color.TRANSPARENT)
                 setOnClickListener { stopQueue() }
+                visibility = View.GONE // hidden by default
             }
             stopQueueButton = btn
 
-            // Try to add near sendButton if possible
+            // Try to add before sendButton so STOP is left, RUN is right
             val parent = sendButton.parent
             if (parent is ViewGroup) {
-                // try to insert right after sendButton
                 val idx = parent.indexOfChild(sendButton)
                 val lp = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.WRAP_CONTENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    marginStart = 16
-                    gravity = Gravity.CENTER_VERTICAL
+                    marginEnd = 16
                 }
-                parent.addView(btn, idx + 1, lp)
+                parent.addView(btn, idx, lp) // insert before sendButton
             } else {
-                // fallback: add to content root as overlay in top-right
+                // fallback: add to content root as overlay in top-left
                 val root = findViewById<ViewGroup>(android.R.id.content)
                 val flp = FrameLayout.LayoutParams(
                     FrameLayout.LayoutParams.WRAP_CONTENT,
                     FrameLayout.LayoutParams.WRAP_CONTENT,
-                    Gravity.TOP or Gravity.END
+                    Gravity.TOP or Gravity.START
                 ).apply {
                     topMargin = 8
-                    rightMargin = 8
+                    leftMargin = 8
                 }
                 root.addView(btn, flp)
             }
@@ -307,18 +311,22 @@ class MainActivity : AppCompatActivity() {
         terminalOutput.append(colorize("\n[STOP] queue stopped and cleared\n", infoColor))
         scrollToBottom()
         hideProgress()
+        stopQueueButton?.visibility = View.GONE
     }
 
     // Основной цикл обработки очереди (последовательно выполняем CommandItem)
     private fun processCommandQueue() {
         processingQueue = true
+        // show stop button
+        runOnUiThread { stopQueueButton?.visibility = View.VISIBLE }
+
         processingJob = lifecycleScope.launch {
             while (commandQueue.isNotEmpty() && isActive) {
                 val item = commandQueue.removeFirst()
                 try {
                     when (item) {
                         is CommandItem.Single -> {
-                            // Если команда помечена как background, то запускаем её и не ждём результата
+                            // If background, start and don't wait
                             if (item.background) {
                                 val bgJob = lifecycleScope.launch {
                                     try {
@@ -330,13 +338,8 @@ class MainActivity : AppCompatActivity() {
                                 backgroundJobs.add(bgJob)
                                 // don't wait; continue to next
                             } else {
-                                // Если команда условная (conditionalNext==true), то мы должны учитывать результат предыдущей
-                                // Но conditionalNext affects how this SINGLE was created from separators; to implement '&&' chaining,
-                                // we interpret conditional flag stored on PREVIOUS command: thus parsed items carry conditionalNext on previous.
-                                // For simplicity, we implement conditional chaining by storing that flag in the PREVIOUS item when parsing.
-                                // Here we just execute current command normally.
-                                val result = runSingleCommand(item.command)
-                                // if this Single has conditionalNext==true, effect handled when parsing built next item; so nothing extra here.
+                                // normal execution
+                                runSingleCommand(item.command)
                             }
                         }
                         is CommandItem.Parallel -> {
@@ -376,6 +379,10 @@ class MainActivity : AppCompatActivity() {
             }
             processingQueue = false
             processingJob = null
+            // hide stop button when done
+            withContext(Dispatchers.Main) {
+                stopQueueButton?.visibility = View.GONE
+            }
         }
     }
 
@@ -389,6 +396,146 @@ class MainActivity : AppCompatActivity() {
         val infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info)
         val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
         val systemYellow = Color.parseColor("#FFD54F")
+
+        // ==== NEW: sleep command ====
+        if (inputToken == "sleep") {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 2) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: sleep <duration>. Examples: sleep 5s | sleep 200ms | sleep 2m\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: sleep usage"
+            }
+            val durTok = parts[1]
+            val millis = parseDurationToMillis(durTok)
+            if (millis <= 0L) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: invalid duration '$durTok'\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: invalid duration"
+            }
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Sleeping ${millis}ms...\n", systemYellow))
+                scrollToBottom()
+            }
+            // suspend without blocking UI
+            var remaining = millis
+            val chunk = 500L
+            while (remaining > 0 && isActive) {
+                val to = if (remaining > chunk) chunk else remaining
+                delay(to)
+                remaining -= to
+            }
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Done sleep ${durTok}\n", infoColor))
+                scrollToBottom()
+            }
+            return "Info: slept ${durTok}"
+        }
+
+// ==== NEW: runsyd command (reads script file from SAF root /scripts and injects into inputField) ====
+if (inputToken == "runsyd") {
+    val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+    if (parts.size < 2) {
+        withContext(Dispatchers.Main) {
+            terminalOutput.append(colorize("Usage: runsyd <name>  (looks for name.syd in scripts folder)\n", errorColor))
+            scrollToBottom()
+        }
+        return "Error: runsyd usage"
+    }
+    val name = parts[1].trim()
+    // read SAF root URI from prefs - prefer 'work_dir_uri', fallback to 'current_dir_uri'
+    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+    val safRoot = prefs.getString("work_dir_uri", null) ?: prefs.getString("current_dir_uri", null)
+    if (safRoot.isNullOrBlank()) {
+        withContext(Dispatchers.Main) {
+            terminalOutput.append(colorize("Error: SAF root not configured. Set scripts folder in settings (work_dir_uri/current_dir_uri).\n", errorColor))
+            scrollToBottom()
+        }
+        return "Error: saf not configured"
+    }
+    try {
+        val tree = DocumentFile.fromTreeUri(this, Uri.parse(safRoot))
+        if (tree == null || !tree.isDirectory) {
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Error: cannot access SAF root (invalid URI)\n", errorColor))
+                scrollToBottom()
+            }
+            return "Error: saf root invalid"
+        }
+        val scriptsDir = tree.findFile("scripts")?.takeIf { it.isDirectory }
+        if (scriptsDir == null) {
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Error: 'scripts' folder not found under SAF root\n", errorColor))
+                scrollToBottom()
+            }
+            return "Error: scripts folder missing"
+        }
+
+        // candidate filenames
+        val candidates = if (name.contains('.')) {
+            listOf(name)
+        } else {
+            listOf("$name.syd", "$name.sh", "$name.txt")
+        }
+
+        var found: DocumentFile? = null
+        for (c in candidates) {
+            val f = scriptsDir.findFile(c)
+            if (f != null && f.isFile) {
+                found = f
+                break
+            }
+        }
+
+        if (found == null) {
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor))
+                scrollToBottom()
+            }
+            return "Error: script not found"
+        }
+
+        // Read file text
+        val uri = found.uri
+        val sb = StringBuilder()
+        contentResolver.openInputStream(uri)?.use { ins ->
+            BufferedReader(InputStreamReader(ins)).use { br ->
+                var line: String?
+                while (br.readLine().also { line = it } != null) {
+                    sb.append(line).append('\n')
+                }
+            }
+        } ?: run {
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Error: cannot open script file\n", errorColor))
+                scrollToBottom()
+            }
+            return "Error: cannot open"
+        }
+
+        val content = sb.toString().trimEnd()
+
+        // inject into input field and run as if pasted
+        withContext(Dispatchers.Main) {
+            inputField.setText(content)
+            inputField.setSelection(inputField.text.length)
+            terminalOutput.append(colorize("Loaded script '${found.name}' — injecting commands...\n", infoColor))
+            scrollToBottom()
+            // call sendCommand to enqueue commands from file (this will add commands while we're processing)
+            sendCommand()
+        }
+        return "Info: runsyd loaded ${found.name}"
+    } catch (t: Throwable) {
+        withContext(Dispatchers.Main) {
+            terminalOutput.append(colorize("Error: failed to read script: ${t.message}\n", errorColor))
+            scrollToBottom()
+        }
+        return "Error: runsyd failed"
+    }
+}
 
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
@@ -627,61 +774,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-// We parse raw input into CommandItem structures.
-// Supports: newline splitting, ";" and "&&" separators, "parallel" groups, and background suffix "&".
-private fun parseInputToCommandItems(raw: String): List<CommandItem> {
-    val result = mutableListOf<CommandItem>()
-    val lines = raw.lines()
-    for (line0 in lines) {
-        var line = line0.trim()
-        if (line.isEmpty()) continue
+    // We parse raw input into CommandItem structures.
+    // Supports: newline splitting, ";" and "&&" separators, "parallel" groups, and background suffix "&".
+    private fun parseInputToCommandItems(raw: String): List<CommandItem> {
+        val result = mutableListOf<CommandItem>()
+        val lines = raw.lines()
+        for (line0 in lines) {
+            var line = line0.trim()
+            if (line.isEmpty()) continue
 
-        // If starts with "parallel" -> parse group
-        if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
-            // remove keyword
-            val rest = line.substringAfter(':', missingDelimiterValue = "").ifEmpty { line.substringAfter("parallel", "") }.trim().trimStart(':').trim()
-            val groupText = if (rest.isEmpty()) "" else rest
-            val parts = groupText.split(";").map { it.trim() }.filter { it.isNotEmpty() }
-            if (parts.isNotEmpty()) {
-                result.add(CommandItem.Parallel(parts))
-            }
-            continue
-        }
-
-        // Now split by separators ; and && preserving conditional semantics
-        var i = 0
-        val sb = StringBuilder()
-        while (i < line.length) {
-            if (i + 1 < line.length && line.substring(i, i + 2) == "&&") {
-                val token = sb.toString().trim()
-                if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = true, background = token.endsWith(" &")))
-                sb.setLength(0)
-                i += 2
+            // If starts with "parallel" -> parse group
+            if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
+                // remove keyword
+                val rest = line.substringAfter(':', missingDelimiterValue = "").ifEmpty { line.substringAfter("parallel", "") }.trim().trimStart(':').trim()
+                val groupText = if (rest.isEmpty()) "" else rest
+                val parts = groupText.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+                if (parts.isNotEmpty()) {
+                    result.add(CommandItem.Parallel(parts))
+                }
                 continue
-            } else if (line[i] == ';') {
-                val token = sb.toString().trim()
-                if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = false, background = token.endsWith(" &")))
-                sb.setLength(0)
-                i++
-                continue
-            } else {
-                sb.append(line[i])
-                i++
+            }
+
+            // Now split by separators ; and && preserving conditional semantics
+            var i = 0
+            val sb = StringBuilder()
+            while (i < line.length) {
+                if (i + 1 < line.length && line.substring(i, i + 2) == "&&") {
+                    val token = sb.toString().trim()
+                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = true, background = token.endsWith(" &")))
+                    sb.setLength(0)
+                    i += 2
+                    continue
+                } else if (line[i] == ';') {
+                    val token = sb.toString().trim()
+                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = false, background = token.endsWith(" &")))
+                    sb.setLength(0)
+                    i++
+                    continue
+                } else {
+                    sb.append(line[i])
+                    i++
+                }
+            }
+            val last = sb.toString().trim()
+            if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
+        }
+
+        // Clean up background markers (remove trailing & from command text) — only for Single items.
+        // For Parallel items we leave them as-is.
+        return result.map { item ->
+            when (item) {
+                is CommandItem.Single -> item.cleanupBackgroundSuffix()
+                is CommandItem.Parallel -> item
             }
         }
-        val last = sb.toString().trim()
-        if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
     }
-
-    // Clean up background markers (remove trailing & from command text) — only for Single items.
-    // For Parallel items we leave them as-is.
-    return result.map { item ->
-        when (item) {
-            is CommandItem.Single -> item.cleanupBackgroundSuffix()
-            is CommandItem.Parallel -> item
-        }
-    }
-}
 
     private fun handleResultAndScroll(
         command: String,
@@ -757,6 +904,18 @@ private fun parseInputToCommandItems(raw: String): List<CommandItem> {
                 lower.endsWith("m") && lower.length > 1 -> (lower.dropLast(1).toLongOrNull() ?: 0L) * 60L
                 lower.endsWith("h") && lower.length > 1 -> (lower.dropLast(1).toLongOrNull() ?: 0L) * 3600L
                 else -> lower.toLongOrNull() ?: 0L
+            }
+        } catch (_: Throwable) { 0L }
+    }
+
+    // New helper: supports 'ms' suffix or falls back to parseDurationToSeconds * 1000
+    private fun parseDurationToMillis(tok: String): Long {
+        if (tok.isEmpty()) return 0L
+        val lower = tok.lowercase().trim()
+        return try {
+            when {
+                lower.endsWith("ms") && lower.length > 2 -> lower.dropLast(2).toLongOrNull() ?: 0L
+                else -> parseDurationToSeconds(lower) * 1000L
             }
         } catch (_: Throwable) { 0L }
     }
