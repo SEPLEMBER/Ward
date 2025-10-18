@@ -50,7 +50,7 @@
                     <activity
             android:name=".ResetupActivity"
             android:exported="false"
-            android:theme="@style/AppTheme.Transparent" />
+            android:theme="@style/AppTheme" />
         
         <!-- foreground-service for watchdog -->
         <service
