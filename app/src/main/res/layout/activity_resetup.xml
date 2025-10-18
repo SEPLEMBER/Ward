@@ -3,7 +3,8 @@
     android:id="@+id/scrollRoot"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="16dp">
+    android:padding="16dp"
+    android:background="#000000" >
 
     <LinearLayout
         android:id="@+id/rootLinear"
@@ -11,22 +12,30 @@
         android:layout_width="match_parent"
         android:layout_height="wrap_content">
 
+        <!-- Title: terminal style -->
         <TextView
             android:id="@+id/titleText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Resetup — массовое удаление приложений"
+            android:text="resetup — batch uninstall utility"
             android:textSize="18sp"
-            android:textStyle="bold"/>
+            android:typeface="monospace"
+            android:textStyle="bold"
+            android:paddingBottom="8dp"
+            android:textColor="#39FF14" />
 
+        <!-- Hint / help text -->
         <TextView
             android:id="@+id/hintText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Вставьте package name'ы по одному в строке, например:\ncom.app1\ncom.app2\ncom.example.editor"
-            android:textSize="14sp"
-            android:paddingTop="8dp"/>
+            android:text="Paste package names, one per line. Example:\ncom.app1\ncom.app2\ncom.example.editor\n\nPress RESETUP to open system uninstall dialogs sequentially."
+            android:textSize="13sp"
+            android:typeface="monospace"
+            android:paddingBottom="8dp"
+            android:textColor="#00FFF7" />
 
+        <!-- Input field: black background, monospace -->
         <EditText
             android:id="@+id/inputEditText"
             android:layout_width="match_parent"
@@ -34,12 +43,17 @@
             android:layout_weight="1"
             android:hint="com.example.tempapp1\ncom.example.tempapp2\n..."
             android:inputType="textMultiLine"
-            android:minLines="6"
+            android:minLines="8"
             android:gravity="top|start"
-            android:background="@android:drawable/edit_text"
-            android:padding="8dp"
-            android:scrollbars="vertical"/>
+            android:padding="12dp"
+            android:typeface="monospace"
+            android:textColor="#EEEEEE"
+            android:hintTextColor="#555555"
+            android:background="#000000"
+            android:scrollbars="vertical"
+            android:cursorVisible="true" />
 
+        <!-- Buttons row -->
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -52,25 +66,46 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="resetup"
-                android:contentDescription="Запустить пакетное удаление"/>
+                android:text="RESETUP"
+                android:typeface="monospace"
+                android:textAllCaps="true"
+                android:background="#000000"
+                android:textColor="#FF5F1F"
+                android:padding="10dp" />
 
             <Button
                 android:id="@+id/stopButton"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:text="Остановить"
+                android:text="STOP"
+                android:typeface="monospace"
+                android:textAllCaps="true"
+                android:background="#000000"
+                android:textColor="#FF00FF"
                 android:layout_marginStart="8dp"
-                android:visibility="gone"/>
-                <!-- Кнопка остановки скрыта по умолчанию; можно показать при старте очереди -->
+                android:visibility="gone"
+                android:padding="10dp" />
         </LinearLayout>
 
+        <!-- Progress / status -->
         <TextView
             android:id="@+id/progressText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Готово: 0 пакетов"
-            android:paddingTop="12dp"/>
+            android:text="READY: 0 packages"
+            android:paddingTop="12dp"
+            android:typeface="monospace"
+            android:textColor="#FFA600" />
+
+        <!-- Footer small terminal prompt -->
+        <TextView
+            android:id="@+id/footerText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="\n> terminal resetup — non-root; system dialogs only\n"
+            android:textSize="12sp"
+            android:typeface="monospace"
+            android:textColor="#66FF66" />
 
     </LinearLayout>
 </ScrollView>
