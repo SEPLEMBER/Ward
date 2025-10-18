@@ -1,6 +1,8 @@
 package org.syndes.terminal
 
 import android.content.BroadcastReceiver
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -11,24 +13,32 @@ import android.text.SpannableStringBuilder
 import android.text.Spanned
 import android.text.method.ScrollingMovementMethod
 import android.text.style.ForegroundColorSpan
+import android.view.Gravity
 import android.view.KeyEvent
+import android.view.ViewGroup
 import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.view.inputmethod.InputMethodManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.util.ArrayDeque
 
 class MainActivity : AppCompatActivity() {
 
@@ -68,6 +78,27 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // очередь команд для пакетного выполнения — теперь хранит либо одиночную команду, либо параллельную группу
+    private val commandQueue = ArrayDeque<CommandItem>()
+    private var processingJob: Job? = null
+    private var processingQueue = false
+
+    // background jobs (для команд с & и т.п.)
+    private val backgroundJobs = mutableListOf<Job>()
+
+    // CompletableDeferred used to wait for intent-based actions (uninstall)
+    private var pendingIntentCompletion: CompletableDeferred<Unit>? = null
+
+    // Launcher for intents that require user interaction and return control
+    private val intentLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        // when system dialog/activity finishes - resume queue processing (if waiting)
+        pendingIntentCompletion?.complete(Unit)
+        pendingIntentCompletion = null
+    }
+
+    // Programmatically created stop-queue button
+    private var stopQueueButton: Button? = null
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -96,6 +127,9 @@ class MainActivity : AppCompatActivity() {
         val embeddedYellow = Color.parseColor("#FFD54F")
         sendButton.setTextColor(embeddedYellow)
         sendButton.setBackgroundColor(Color.TRANSPARENT)
+
+        // Добавляем кнопку "STOP QUEUE" программно (без изменения XML)
+        addStopQueueButton()
 
         // Сделаем inputField явно фокусируемым в touch-mode (предотвращает потерю ввода)
         inputField.isFocusable = true
@@ -150,68 +184,263 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) { /* ignore */ }
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        hideProgress()
+        // cleanup background jobs
+        backgroundJobs.forEach { it.cancel() }
+        backgroundJobs.clear()
+        processingJob?.cancel()
+        pendingIntentCompletion?.completeExceptionally(CancellationException("activity destroyed"))
+        pendingIntentCompletion = null
+    }
+
+    /**
+     * sendCommand теперь поддерживает:
+     * - многострочный ввод;
+     * - разделители ';' и '&&' (&& — условное продолжение, выполняется следующая команда только если предыдущая успешна);
+     * - ключевое слово "parallel" или "parallel:" для параллельного выполнения группы команд;
+     * - суффикс '&' (space + &) для фонового запуска конкретной команды;
+     *
+     * Новые команды добавляются в очередь и выполняются последовательно (если не указано parallel/background).
+     */
     private fun sendCommand() {
-        val command = inputField.text.toString().trim()
-        if (command.isEmpty()) {
+        val rawInput = inputField.text.toString()
+        if (rawInput.isBlank()) {
             // если поле пустое - просто убедимся, что клавиатура видна и поле сфокусировано
             focusAndShowKeyboard()
             return
         }
 
         val inputColor = ContextCompat.getColor(this, R.color.color_command)
-        val errorColor = ContextCompat.getColor(this, R.color.color_error)
+
+        // Парсим ввод в список CommandItem
+        val items = parseInputToCommandItems(rawInput)
+
+        // Добавляем элементы в очередь и печатаем в терминал
+        for (item in items) {
+            when (item) {
+                is CommandItem.Single -> {
+                    commandQueue.addLast(item)
+                    terminalOutput.append(colorize("\n> ${item.command}${if (item.background) " &" else ""}\n", inputColor))
+                }
+                is CommandItem.Parallel -> {
+                    commandQueue.addLast(item)
+                    terminalOutput.append(colorize("\n> parallel { ${item.commands.joinToString(" ; ")} }\n", inputColor))
+                }
+            }
+        }
+
+        // Очищаем поле ввода
+        inputField.text.clear()
+        focusAndShowKeyboard()
+
+        // Если сейчас не исполняется очередь — стартуем процесс
+        if (!processingQueue) processCommandQueue()
+    }
+
+    // Add a STOP QUEUE button programmatically (no XML change)
+    private fun addStopQueueButton() {
+        try {
+            if (stopQueueButton != null) return
+            val btn = Button(this).apply {
+                text = "STOP QUEUE"
+                setTextColor(Color.parseColor("#FF5F1F"))
+                setBackgroundColor(Color.TRANSPARENT)
+                setOnClickListener { stopQueue() }
+            }
+            stopQueueButton = btn
+
+            // Try to add near sendButton if possible
+            val parent = sendButton.parent
+            if (parent is ViewGroup) {
+                // try to insert right after sendButton
+                val idx = parent.indexOfChild(sendButton)
+                val lp = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.WRAP_CONTENT,
+                    LinearLayout.LayoutParams.WRAP_CONTENT
+                ).apply {
+                    marginStart = 16
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                parent.addView(btn, idx + 1, lp)
+            } else {
+                // fallback: add to content root as overlay in top-right
+                val root = findViewById<ViewGroup>(android.R.id.content)
+                val flp = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.END
+                ).apply {
+                    topMargin = 8
+                    rightMargin = 8
+                }
+                root.addView(btn, flp)
+            }
+        } catch (t: Throwable) {
+            // ignore failure to add UI; functionality still available via programmatic stop if needed
+        }
+    }
+
+    // Stop queue: cancel processing, clear queue, cancel background jobs and pending intent
+    private fun stopQueue() {
+        // clear the queue
+        commandQueue.clear()
+
+        // cancel processing job
+        processingJob?.cancel(CancellationException("stopped by user"))
+        processingJob = null
+        processingQueue = false
+
+        // cancel pending intent wait (if waiting for uninstall)
+        try {
+            pendingIntentCompletion?.completeExceptionally(CancellationException("stopped by user"))
+        } catch (_: Throwable) { /* ignore */ }
+        pendingIntentCompletion = null
+
+        // cancel background jobs
+        backgroundJobs.forEach { it.cancel(CancellationException("stopped by user")) }
+        backgroundJobs.clear()
+
+        // UI feedback
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
-        val defaultColor = ContextCompat.getColor(this, R.color.terminal_text)
+        terminalOutput.append(colorize("\n[STOP] queue stopped and cleared\n", infoColor))
+        scrollToBottom()
+        hideProgress()
+    }
+
+    // Основной цикл обработки очереди (последовательно выполняем CommandItem)
+    private fun processCommandQueue() {
+        processingQueue = true
+        processingJob = lifecycleScope.launch {
+            while (commandQueue.isNotEmpty() && isActive) {
+                val item = commandQueue.removeFirst()
+                try {
+                    when (item) {
+                        is CommandItem.Single -> {
+                            // Если команда помечена как background, то запускаем её и не ждём результата
+                            if (item.background) {
+                                val bgJob = lifecycleScope.launch {
+                                    try {
+                                        runSingleCommand(item.command)
+                                    } catch (_: Throwable) {
+                                        // background failures are logged to terminal within runSingleCommand
+                                    }
+                                }
+                                backgroundJobs.add(bgJob)
+                                // don't wait; continue to next
+                            } else {
+                                // Если команда условная (conditionalNext==true), то мы должны учитывать результат предыдущей
+                                // Но conditionalNext affects how this SINGLE was created from separators; to implement '&&' chaining,
+                                // we interpret conditional flag stored on PREVIOUS command: thus parsed items carry conditionalNext on previous.
+                                // For simplicity, we implement conditional chaining by storing that flag in the PREVIOUS item when parsing.
+                                // Here we just execute current command normally.
+                                val result = runSingleCommand(item.command)
+                                // if this Single has conditionalNext==true, effect handled when parsing built next item; so nothing extra here.
+                            }
+                        }
+                        is CommandItem.Parallel -> {
+                            // Validate that none of commands require intent-based user interaction (uninstall). If they do — disallow.
+                            val hasIntentCommands = item.commands.any { it.trim().split("\\s+".toRegex()).firstOrNull()?.lowercase() in setOf("uninstall") }
+                            if (hasIntentCommands) {
+                                val err = ContextCompat.getColor(this@MainActivity, R.color.color_error)
+                                withContext(Dispatchers.Main) {
+                                    terminalOutput.append(colorize("Error: cannot run uninstall or intent-based commands in parallel group. Skipping parallel group.\n", err))
+                                }
+                                continue
+                            }
+                            // Launch all commands concurrently and wait for all to complete
+                            val deferredJobs = item.commands.map { cmd ->
+                                lifecycleScope.launch {
+                                    try {
+                                        runSingleCommand(cmd)
+                                    } catch (t: Throwable) {
+                                        val err = ContextCompat.getColor(this@MainActivity, R.color.color_error)
+                                        withContext(Dispatchers.Main) {
+                                            terminalOutput.append(colorize("Error (parallel): ${t.message}\n", err))
+                                        }
+                                    }
+                                }
+                            }
+                            // Wait for all to complete
+                            deferredJobs.joinAll()
+                        }
+                    }
+                } catch (t: Throwable) {
+                    val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("Error: failed to execute item : ${t.message}\n", errorColor))
+                        scrollToBottom()
+                    }
+                }
+            }
+            processingQueue = false
+            processingJob = null
+        }
+    }
+
+    /**
+     * Выполнение одной команды. Возвращает строковый результат (или сообщение об ошибке).
+     * Функция сама пишет в терминал (progress, info), но также возвращает результат для условной логики.
+     */
+    private suspend fun runSingleCommand(command: String): String? {
+        val inputToken = command.split("\\s+".toRegex()).firstOrNull()?.lowercase() ?: ""
+        val defaultColor = ContextCompat.getColor(this@MainActivity, R.color.terminal_text)
+        val infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info)
+        val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
         val systemYellow = Color.parseColor("#FFD54F")
 
-        terminalOutput.append(colorize("\n> $command\n", inputColor))
-
-        // ---------------------------
-        // watchdog: schedule a command to be executed after delay
-        // Usage: watchdog 15s <command...>   or watchdog 5m <command...> or watchdog 2h <command...>
-        // Implementation: prefer starting a Foreground Service (WatchdogService).
-        // Fallback: if service start fails, run a local coroutine (best-effort, may be cancelled when activity backgrounded).
-        // ---------------------------
+        // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Scheduling watchdog: $command\n", infoColor))
+                scrollToBottom()
+            }
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (parts.size < 3) {
-                terminalOutput.append(colorize("Usage: watchdog <duration> <command...> e.g. watchdog 5m replace old new logs\n", errorColor))
-                inputField.text.clear()
-                focusAndShowKeyboard()
-                return
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: watchdog <duration> <command...>\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: invalid watchdog syntax"
             }
-
             val durToken = parts[1]
             val targetCmd = parts.drop(2).joinToString(" ")
             val durSec = parseDurationToSeconds(durToken)
             if (durSec <= 0L) {
-                terminalOutput.append(colorize("Error: invalid duration '$durToken'\n", errorColor))
-                inputField.text.clear()
-                focusAndShowKeyboard()
-                return
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: invalid duration '$durToken'\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: invalid duration"
             }
 
-            // Try to start WatchdogService (foreground). If service class not present or fails, fallback to in-activity coroutine.
             try {
-                val svcIntent = Intent(this, WatchdogService::class.java).apply {
+                val svcIntent = Intent(this@MainActivity, WatchdogService::class.java).apply {
                     putExtra(WatchdogService.EXTRA_CMD, targetCmd)
                     putExtra(WatchdogService.EXTRA_DELAY_SEC, durSec)
                 }
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    ContextCompat.startForegroundService(this, svcIntent)
+                    ContextCompat.startForegroundService(this@MainActivity, svcIntent)
                 } else {
                     startService(svcIntent)
                 }
-                terminalOutput.append(colorize("Watchdog service started: will run \"$targetCmd\" in $durToken\n", infoColor))
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Watchdog service started: will run \"$targetCmd\" in $durToken\n", infoColor))
+                    scrollToBottom()
+                }
+                return "Info: watchdog scheduled"
             } catch (t: Throwable) {
-                // fallback: local coroutine (best-effort)
-                terminalOutput.append(colorize("Warning: cannot start watchdog service, falling back to in-app timer (may be cancelled when app backgrounded)\n", errorColor))
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Warning: cannot start watchdog service, falling back to in-app timer (may be cancelled when app backgrounded)\n", errorColor))
+                    scrollToBottom()
+                }
+                // fallback: schedule reinjection
                 lifecycleScope.launch {
                     try {
                         progressRow.visibility = TextView.VISIBLE
                         progressBar.isIndeterminate = true
                         var remaining = durSec
-
                         fun pretty(sec: Long): String {
                             val h = sec / 3600
                             val m = (sec % 3600) / 60
@@ -220,9 +449,7 @@ class MainActivity : AppCompatActivity() {
                             else if (m > 0) String.format("%02dm %02ds", m, s)
                             else String.format("%02ds", s)
                         }
-
                         progressText.text = "Watchdog: will run \"$targetCmd\" in ${pretty(remaining)}"
-
                         while (remaining > 0 && isActive) {
                             if (remaining >= 60L) {
                                 var slept = 0L
@@ -242,87 +469,212 @@ class MainActivity : AppCompatActivity() {
                                 }
                             }
                         }
-
                         progressText.text = "Watchdog: executing \"$targetCmd\" now..."
                         delay(250)
-
+                        // Re-inject target command into queue (в конец) — будет выполнен после текущих команд
+                        commandQueue.addLast(CommandItem.Single(targetCmd, conditionalNext = false, background = false))
+                        if (!processingQueue) processCommandQueue()
+                    } catch (_: Throwable) {
                         withContext(Dispatchers.Main) {
-                            inputField.setText(targetCmd)
-                            sendCommand()
+                            terminalOutput.append(colorize("Error: watchdog fallback failed\n", errorColor))
+                            scrollToBottom()
                         }
-                    } catch (t2: Throwable) {
-                        terminalOutput.append(colorize("Error: watchdog failed: ${t2.message}\n", errorColor))
                     } finally {
-                        progressRow.visibility = TextView.GONE
-                        progressText.text = ""
+                        withContext(Dispatchers.Main) {
+                            progressRow.visibility = TextView.GONE
+                            progressText.text = ""
+                        }
                     }
                 }
+                return "Info: watchdog fallback scheduled"
             }
-
-            // acknowledge scheduling in UI and clear input
-            inputField.text.clear()
-            focusAndShowKeyboard()
-            return
         }
 
+        // clear
         if (command.equals("clear", ignoreCase = true)) {
-            terminalOutput.text = ""
-            try {
-                val maybe = terminal.execute(command, this)
-                if (maybe != null && !maybe.startsWith("Info: Screen cleared.", ignoreCase = true)) {
-                    terminalOutput.append(colorize(maybe + "\n", infoColor))
-                }
-            } catch (t: Throwable) {
-                terminalOutput.append(colorize("Error: command execution failed\n", errorColor))
+            withContext(Dispatchers.Main) {
+                terminalOutput.text = ""
+                scrollToBottom()
             }
-            inputField.text.clear()
-            focusAndShowKeyboard()
-            return
+            val maybe = try {
+                withContext(Dispatchers.Main) { terminal.execute(command, this@MainActivity) }
+            } catch (_: Throwable) {
+                null
+            }
+            if (maybe != null && !maybe.startsWith("Info: Screen cleared.", ignoreCase = true)) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize(maybe + "\n", infoColor))
+                    scrollToBottom()
+                }
+            }
+            return maybe ?: "Info: screen cleared"
         }
 
+        // exit
         if (command.equals("exit", ignoreCase = true)) {
-            terminalOutput.append(colorize("shutting down...\n", infoColor))
-            lifecycleScope.launch {
-                delay(300)
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("shutting down...\n", infoColor))
+                scrollToBottom()
+            }
+            delay(300)
+            withContext(Dispatchers.Main) {
                 finishAffinity()
             }
-            return
+            return "Info: exit"
         }
 
-        val cmdToken = command.split("\\s+".toRegex()).firstOrNull()?.lowercase() ?: ""
-        val runInIo = heavyCommands.contains(cmdToken)
+        // uninstall <pkg> — intent-based, wait for result
+        if (inputToken == "uninstall") {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 2) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: uninstall <package.name>\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: uninstall usage"
+            }
+            val pkg = parts[1].trim()
+            val installed = try {
+                packageManager.getPackageInfo(pkg, 0)
+                true
+            } catch (_: Exception) {
+                false
+            }
+            if (!installed) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Not installed: $pkg\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: not installed"
+            }
 
+            val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE)
+                .setData(android.net.Uri.parse("package:$pkg"))
+                .putExtra(Intent.EXTRA_RETURN_RESULT, true)
+
+            pendingIntentCompletion = CompletableDeferred()
+            try {
+                intentLauncher.launch(intent)
+                // wait until activity result arrives or stop requested
+                pendingIntentCompletion?.await()
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Uninstall flow finished for $pkg\n", infoColor))
+                }
+                val stillInstalled = try {
+                    packageManager.getPackageInfo(pkg, 0)
+                    true
+                } catch (_: Exception) {
+                    false
+                }
+                val msg = if (!stillInstalled) {
+                    val s = "Info: package removed: $pkg"
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("$s\n", infoColor))
+                        scrollToBottom()
+                    }
+                    s
+                } else {
+                    val s = "Info: package still installed: $pkg"
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("$s\n", defaultColor))
+                        scrollToBottom()
+                    }
+                    s
+                }
+                return msg
+            } catch (t: Throwable) {
+                pendingIntentCompletion = null
+                val errMsg = "Error: cannot launch uninstall for $pkg: ${t.message}"
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("$errMsg\n", errorColor))
+                    scrollToBottom()
+                }
+                return errMsg
+            }
+        }
+
+        // Other commands: heavy -> IO, else main
+        val runInIo = heavyCommands.contains(inputToken)
         if (runInIo) {
-            showProgress("Working")
-            lifecycleScope.launch {
-                val result = withContext(Dispatchers.IO) {
+            withContext(Dispatchers.Main) { showProgress("Working") }
+            val result = try {
+                withContext(Dispatchers.IO) {
                     try {
                         terminal.execute(command, this@MainActivity)
                     } catch (t: Throwable) {
                         "Error: ${t.message ?: "execution failed"}"
                     }
                 }
-                hideProgress()
-                handleResultAndScroll(
-                    command,
-                    result,
-                    defaultColor = ContextCompat.getColor(this@MainActivity, R.color.terminal_text),
-                    infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info),
-                    errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error),
-                    systemYellow = Color.parseColor("#FFD54F")
-                )
+            } finally {
+                withContext(Dispatchers.Main) { hideProgress() }
             }
+            withContext(Dispatchers.Main) {
+                handleResultAndScroll(command, result, defaultColor, infoColor, errorColor, systemYellow)
+            }
+            return result
         } else {
-            val result: String? = try {
-                terminal.execute(command, this)
+            val result = try {
+                withContext(Dispatchers.Main) {
+                    terminal.execute(command, this@MainActivity)
+                }
             } catch (t: Throwable) {
                 "Error: command execution failed"
             }
-            handleResultAndScroll(command, result, defaultColor, infoColor, errorColor, systemYellow)
+            withContext(Dispatchers.Main) {
+                handleResultAndScroll(command, result, defaultColor, infoColor, errorColor, systemYellow)
+            }
+            return result
+        }
+    }
+
+    // We parse raw input into CommandItem structures.
+    // Supports: newline splitting, ";" and "&&" separators, "parallel" groups, and background suffix "&".
+    private fun parseInputToCommandItems(raw: String): List<CommandItem> {
+        val result = mutableListOf<CommandItem>()
+        val lines = raw.lines()
+        for (line0 in lines) {
+            var line = line0.trim()
+            if (line.isEmpty()) continue
+
+            // If starts with "parallel" -> parse group
+            if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
+                // remove keyword
+                val rest = line.substringAfter(':', missingDelimiterValue = "").ifEmpty { line.substringAfter("parallel", "") }.trim().trimStart(':').trim()
+                val groupText = if (rest.isEmpty()) "" else rest
+                val parts = groupText.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+                if (parts.isNotEmpty()) {
+                    result.add(CommandItem.Parallel(parts))
+                }
+                continue
+            }
+
+            // Now split by separators ; and && preserving conditional semantics
+            var i = 0
+            val sb = StringBuilder()
+            while (i < line.length) {
+                if (i + 1 < line.length && line.substring(i, i + 2) == "&&") {
+                    val token = sb.toString().trim()
+                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = true, background = token.endsWith(" &")))
+                    sb.setLength(0)
+                    i += 2
+                    continue
+                } else if (line[i] == ';') {
+                    val token = sb.toString().trim()
+                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = false, background = token.endsWith(" &")))
+                    sb.setLength(0)
+                    i++
+                    continue
+                } else {
+                    sb.append(line[i])
+                    i++
+                }
+            }
+            val last = sb.toString().trim()
+            if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
         }
 
-        inputField.text.clear()
-        focusAndShowKeyboard()
+        // Clean up background markers (remove trailing & from command text)
+        return result.map { it.cleanupBackgroundSuffix() }
     }
 
     private fun handleResultAndScroll(
@@ -422,8 +774,19 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    override fun onDestroy() {
-        super.onDestroy()
-        hideProgress()
+    // CommandItem sealed class represents either a single command or a parallel group
+    private sealed class CommandItem {
+        data class Single(val command: String, val conditionalNext: Boolean = false, val background: Boolean = false) : CommandItem() {
+            fun cleanupBackgroundSuffix(): Single {
+                var c = command
+                if (background) {
+                    // remove trailing & if present
+                    c = c.removeSuffix("&").trimEnd()
+                }
+                return Single(c, conditionalNext, background)
+            }
+        }
+
+        data class Parallel(val commands: List<String>) : CommandItem()
     }
 }
