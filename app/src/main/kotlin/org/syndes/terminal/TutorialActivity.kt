@@ -105,14 +105,6 @@ Available commands:
   notif           - open notification settings
   acc             - open account settings
   dev             - open developer settings
-  syd list        - list scripts in work_dir/scripts
-  syd run <name>  - run script (name or name.syd)
-  syd stop <script-id> - stop running script (id returned on start)
-  syd edit <name> - open script for editing (if editor available)
-  syd validate <name> - validate syntax using ScriptHandler
-  run <name>      - alias for 'syd run <name>'
-  matrix fall [color] - start Matrix effect (color: blue or green)
-  tutorial        - open tutorial screen
   exit            - shut down the application
   backup|snapshot <path> - create backup of file/dir in SydBack
   batchren <dir> <newPattern> - batch rename files in directory
@@ -136,7 +128,6 @@ Available commands:
   logcat [-t tag] [-l level] [-n lines] - view system logs
   notify -t <title> -m <message> - send system notification
   split <file> <lines_per_file> [prefix] - split file into parts by lines
-  dedup-files <dir> [--delete] - find/delete duplicate files
   checksum <file> [md5|sha256] - compute file hash
   rev <file> [--inplace] - reverse line order in file
   cut -d<delim> -f<fields> <file> - extract fields from file by delimiter
