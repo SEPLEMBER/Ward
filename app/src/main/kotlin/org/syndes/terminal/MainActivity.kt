@@ -627,55 +627,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // We parse raw input into CommandItem structures.
-    // Supports: newline splitting, ";" and "&&" separators, "parallel" groups, and background suffix "&".
-    private fun parseInputToCommandItems(raw: String): List<CommandItem> {
-        val result = mutableListOf<CommandItem>()
-        val lines = raw.lines()
-        for (line0 in lines) {
-            var line = line0.trim()
-            if (line.isEmpty()) continue
+// We parse raw input into CommandItem structures.
+// Supports: newline splitting, ";" and "&&" separators, "parallel" groups, and background suffix "&".
+private fun parseInputToCommandItems(raw: String): List<CommandItem> {
+    val result = mutableListOf<CommandItem>()
+    val lines = raw.lines()
+    for (line0 in lines) {
+        var line = line0.trim()
+        if (line.isEmpty()) continue
 
-            // If starts with "parallel" -> parse group
-            if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
-                // remove keyword
-                val rest = line.substringAfter(':', missingDelimiterValue = "").ifEmpty { line.substringAfter("parallel", "") }.trim().trimStart(':').trim()
-                val groupText = if (rest.isEmpty()) "" else rest
-                val parts = groupText.split(";").map { it.trim() }.filter { it.isNotEmpty() }
-                if (parts.isNotEmpty()) {
-                    result.add(CommandItem.Parallel(parts))
-                }
-                continue
+        // If starts with "parallel" -> parse group
+        if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
+            // remove keyword
+            val rest = line.substringAfter(':', missingDelimiterValue = "").ifEmpty { line.substringAfter("parallel", "") }.trim().trimStart(':').trim()
+            val groupText = if (rest.isEmpty()) "" else rest
+            val parts = groupText.split(";").map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isNotEmpty()) {
+                result.add(CommandItem.Parallel(parts))
             }
-
-            // Now split by separators ; and && preserving conditional semantics
-            var i = 0
-            val sb = StringBuilder()
-            while (i < line.length) {
-                if (i + 1 < line.length && line.substring(i, i + 2) == "&&") {
-                    val token = sb.toString().trim()
-                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = true, background = token.endsWith(" &")))
-                    sb.setLength(0)
-                    i += 2
-                    continue
-                } else if (line[i] == ';') {
-                    val token = sb.toString().trim()
-                    if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = false, background = token.endsWith(" &")))
-                    sb.setLength(0)
-                    i++
-                    continue
-                } else {
-                    sb.append(line[i])
-                    i++
-                }
-            }
-            val last = sb.toString().trim()
-            if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
+            continue
         }
 
-        // Clean up background markers (remove trailing & from command text)
-        return result.map { it.cleanupBackgroundSuffix() }
+        // Now split by separators ; and && preserving conditional semantics
+        var i = 0
+        val sb = StringBuilder()
+        while (i < line.length) {
+            if (i + 1 < line.length && line.substring(i, i + 2) == "&&") {
+                val token = sb.toString().trim()
+                if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = true, background = token.endsWith(" &")))
+                sb.setLength(0)
+                i += 2
+                continue
+            } else if (line[i] == ';') {
+                val token = sb.toString().trim()
+                if (token.isNotEmpty()) result.add(CommandItem.Single(token, conditionalNext = false, background = token.endsWith(" &")))
+                sb.setLength(0)
+                i++
+                continue
+            } else {
+                sb.append(line[i])
+                i++
+            }
+        }
+        val last = sb.toString().trim()
+        if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
     }
+
+    // Clean up background markers (remove trailing & from command text) — only for Single items.
+    // For Parallel items we leave them as-is.
+    return result.map { item ->
+        when (item) {
+            is CommandItem.Single -> item.cleanupBackgroundSuffix()
+            is CommandItem.Parallel -> item
+        }
+    }
+}
 
     private fun handleResultAndScroll(
         command: String,
