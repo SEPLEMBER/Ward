@@ -44,6 +44,7 @@ import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.util.ArrayDeque
+import kotlin.coroutines.coroutineContext
 
 class MainActivity : AppCompatActivity() {
 
@@ -207,7 +208,7 @@ class MainActivity : AppCompatActivity() {
      * - ключевое слово "parallel" или "parallel:" для параллельного выполнения группы команд;
      * - суффикс '&' (space + &) для фонового запуска конкретной команды;
      *
-     * Новые команды добавляются в очередь и выполняются последовательно (если не указано parallel/background).
+     * Новые команды добавляются в очеред и выполняются последовательно (если не указано parallel/background).
      */
     private fun sendCommand() {
         val rawInput = inputField.text.toString()
@@ -393,8 +394,8 @@ class MainActivity : AppCompatActivity() {
     private suspend fun runSingleCommand(command: String): String? {
         val inputToken = command.split("\\s+".toRegex()).firstOrNull()?.lowercase() ?: ""
         val defaultColor = ContextCompat.getColor(this@MainActivity, R.color.terminal_text)
-        val infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info)
-        val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
+        val infoColor = ContextCompat.getColor(this, R.color.color_info)
+        val errorColor = ContextCompat.getColor(this, R.color.color_error)
         val systemYellow = Color.parseColor("#FFD54F")
 
         // ==== NEW: sleep command ====
@@ -423,7 +424,7 @@ class MainActivity : AppCompatActivity() {
             // suspend without blocking UI
             var remaining = millis
             val chunk = 500L
-            while (remaining > 0 && isActive) {
+            while (remaining > 0 && coroutineContext.isActive) {
                 val to = if (remaining > chunk) chunk else remaining
                 delay(to)
                 remaining -= to
@@ -435,107 +436,107 @@ class MainActivity : AppCompatActivity() {
             return "Info: slept ${durTok}"
         }
 
-// ==== NEW: runsyd command (reads script file from SAF root /scripts and injects into inputField) ====
-if (inputToken == "runsyd") {
-    val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
-    if (parts.size < 2) {
-        withContext(Dispatchers.Main) {
-            terminalOutput.append(colorize("Usage: runsyd <name>  (looks for name.syd in scripts folder)\n", errorColor))
-            scrollToBottom()
-        }
-        return "Error: runsyd usage"
-    }
-    val name = parts[1].trim()
-    // read SAF root URI from prefs - prefer 'work_dir_uri', fallback to 'current_dir_uri'
-    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    val safRoot = prefs.getString("work_dir_uri", null) ?: prefs.getString("current_dir_uri", null)
-    if (safRoot.isNullOrBlank()) {
-        withContext(Dispatchers.Main) {
-            terminalOutput.append(colorize("Error: SAF root not configured. Set scripts folder in settings (work_dir_uri/current_dir_uri).\n", errorColor))
-            scrollToBottom()
-        }
-        return "Error: saf not configured"
-    }
-    try {
-        val tree = DocumentFile.fromTreeUri(this, Uri.parse(safRoot))
-        if (tree == null || !tree.isDirectory) {
-            withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Error: cannot access SAF root (invalid URI)\n", errorColor))
-                scrollToBottom()
-            }
-            return "Error: saf root invalid"
-        }
-        val scriptsDir = tree.findFile("scripts")?.takeIf { it.isDirectory }
-        if (scriptsDir == null) {
-            withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Error: 'scripts' folder not found under SAF root\n", errorColor))
-                scrollToBottom()
-            }
-            return "Error: scripts folder missing"
-        }
-
-        // candidate filenames
-        val candidates = if (name.contains('.')) {
-            listOf(name)
-        } else {
-            listOf("$name.syd", "$name.sh", "$name.txt")
-        }
-
-        var found: DocumentFile? = null
-        for (c in candidates) {
-            val f = scriptsDir.findFile(c)
-            if (f != null && f.isFile) {
-                found = f
-                break
-            }
-        }
-
-        if (found == null) {
-            withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor))
-                scrollToBottom()
-            }
-            return "Error: script not found"
-        }
-
-        // Read file text
-        val uri = found.uri
-        val sb = StringBuilder()
-        contentResolver.openInputStream(uri)?.use { ins ->
-            BufferedReader(InputStreamReader(ins)).use { br ->
-                var line: String?
-                while (br.readLine().also { line = it } != null) {
-                    sb.append(line).append('\n')
+        // ==== NEW: runsyd command (reads script file from SAF root /scripts and injects into inputField) ====
+        if (inputToken == "runsyd") {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 2) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: runsyd <name>  (looks for name.syd in scripts folder)\n", errorColor))
+                    scrollToBottom()
                 }
+                return "Error: runsyd usage"
             }
-        } ?: run {
-            withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Error: cannot open script file\n", errorColor))
-                scrollToBottom()
+            val name = parts[1].trim()
+            // read SAF root URI from prefs - prefer 'work_dir_uri', fallback to 'current_dir_uri'
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val safRoot = prefs.getString("work_dir_uri", null) ?: prefs.getString("current_dir_uri", null)
+            if (safRoot.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: SAF root not configured. Set scripts folder in settings (work_dir_uri/current_dir_uri).\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: saf not configured"
             }
-            return "Error: cannot open"
-        }
+            try {
+                val tree = DocumentFile.fromTreeUri(this, Uri.parse(safRoot))
+                if (tree == null || !tree.isDirectory) {
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("Error: cannot access SAF root (invalid URI)\n", errorColor))
+                        scrollToBottom()
+                    }
+                    return "Error: saf root invalid"
+                }
+                val scriptsDir = tree.findFile("scripts")?.takeIf { it.isDirectory }
+                if (scriptsDir == null) {
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("Error: 'scripts' folder not found under SAF root\n", errorColor))
+                        scrollToBottom()
+                    }
+                    return "Error: scripts folder missing"
+                }
 
-        val content = sb.toString().trimEnd()
+                // candidate filenames
+                val candidates = if (name.contains('.')) {
+                    listOf(name)
+                } else {
+                    listOf("$name.syd", "$name.sh", "$name.txt")
+                }
 
-        // inject into input field and run as if pasted
-        withContext(Dispatchers.Main) {
-            inputField.setText(content)
-            inputField.setSelection(inputField.text.length)
-            terminalOutput.append(colorize("Loaded script '${found.name}' — injecting commands...\n", infoColor))
-            scrollToBottom()
-            // call sendCommand to enqueue commands from file (this will add commands while we're processing)
-            sendCommand()
+                var found: DocumentFile? = null
+                for (c in candidates) {
+                    val f = scriptsDir.findFile(c)
+                    if (f != null && f.isFile) {
+                        found = f
+                        break
+                    }
+                }
+
+                if (found == null) {
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor))
+                        scrollToBottom()
+                    }
+                    return "Error: script not found"
+                }
+
+                // Read file text
+                val uri = found.uri
+                val sb = StringBuilder()
+                contentResolver.openInputStream(uri)?.use { ins ->
+                    BufferedReader(InputStreamReader(ins)).use { br ->
+                        var line: String?
+                        while (br.readLine().also { line = it } != null) {
+                            sb.append(line).append('\n')
+                        }
+                    }
+                } ?: run {
+                    withContext(Dispatchers.Main) {
+                        terminalOutput.append(colorize("Error: cannot open script file\n", errorColor))
+                        scrollToBottom()
+                    }
+                    return "Error: cannot open"
+                }
+
+                val content = sb.toString().trimEnd()
+
+                // inject into input field and run as if pasted
+                withContext(Dispatchers.Main) {
+                    inputField.setText(content)
+                    inputField.setSelection(inputField.text.length)
+                    terminalOutput.append(colorize("Loaded script '${found.name}' — injecting commands...\n", infoColor))
+                    scrollToBottom()
+                    // call sendCommand to enqueue commands from file (this will add commands while we're processing)
+                    sendCommand()
+                }
+                return "Info: runsyd loaded ${found.name}"
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: failed to read script: ${t.message}\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: runsyd failed"
+            }
         }
-        return "Info: runsyd loaded ${found.name}"
-    } catch (t: Throwable) {
-        withContext(Dispatchers.Main) {
-            terminalOutput.append(colorize("Error: failed to read script: ${t.message}\n", errorColor))
-            scrollToBottom()
-        }
-        return "Error: runsyd failed"
-    }
-}
 
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
@@ -696,7 +697,7 @@ if (inputToken == "runsyd") {
             }
 
             val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE)
-                .setData(android.net.Uri.parse("package:$pkg"))
+                .setData(Uri.parse("package:$pkg"))
                 .putExtra(Intent.EXTRA_RETURN_RESULT, true)
 
             pendingIntentCompletion = CompletableDeferred()
