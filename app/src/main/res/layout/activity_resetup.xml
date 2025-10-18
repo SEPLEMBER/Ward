@@ -1,0 +1,72 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/root"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:padding="16dp"
+    >
+
+    <TextView
+        android:id="@+id/titleText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Resetup — массовое удаление приложений"
+        android:textSize="18sp"
+        android:textStyle="bold"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <TextView
+        android:id="@+id/hintText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Вставьте package name'ы по одному в строке, например:\ncom.app1\ncom.app2\ncom.example.editor"
+        android:textSize="14sp"
+        android:paddingTop="8dp"
+        app:layout_constraintTop_toBottomOf="@id/titleText"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"/>
+
+    <EditText
+        android:id="@+id/inputEditText"
+        android:layout_width="0dp"
+        android:layout_height="0dp"
+        android:hint="com.example.tempapp1\ncom.example.tempapp2\n..."
+        android:inputType="textMultiLine"
+        android:minLines="6"
+        android:gravity="top|start"
+        android:background="@android:drawable/edit_text"
+        app:layout_constraintTop_toBottomOf="@id/hintText"
+        app:layout_constraintBottom_toTopOf="@id/resetupButton"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintVertical_bias="0.0"
+        android:layout_marginTop="12dp"
+        android:layout_marginBottom="12dp"
+        />
+
+    <Button
+        android:id="@+id/resetupButton"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="resetup"
+        android:contentDescription="Запустить пакетное удаление"
+        app:layout_constraintBottom_toTopOf="@id/progressText"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"/>
+
+    <TextView
+        android:id="@+id/progressText"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:text="Готово: 0 пакетов"
+        android:paddingTop="12dp"
+        app:layout_constraintTop_toBottomOf="@id/resetupButton"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"/>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
