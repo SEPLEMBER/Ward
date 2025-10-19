@@ -97,7 +97,7 @@ Hello!   \__/'---'\__/
                 }
 
                 "about" -> {
-                    "Info: Syndes Terminal v0.13"
+                    "Info: Syndes Terminal v0.17.3"
                 }
 
                 // -------------------------
