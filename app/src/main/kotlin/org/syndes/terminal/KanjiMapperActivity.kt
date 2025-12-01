@@ -87,7 +87,7 @@ class KanjiMapperActivity : AppCompatActivity() {
     private fun doEncode() {
         val input = inputEditText.text.toString()
         if (input.isEmpty()) {
-            Toast.makeText(this, "Введите текст для кодирования", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Enter text...", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -106,20 +106,20 @@ class KanjiMapperActivity : AppCompatActivity() {
 
         if (unsupported.isNotEmpty()) {
             val list = unsupported.joinToString(separator = " ") { it.toString() }
-            Toast.makeText(this, "Содержит неподдерживаемые символы: $list", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Unsupport simbols: $list", Toast.LENGTH_LONG).show()
             return
         }
 
         val out = sb.toString()
         inputEditText.setText(out)
         copyToClipboard(out)
-        Toast.makeText(this, "Закодировано и скопировано в буфер обмена", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Encoded", Toast.LENGTH_SHORT).show()
     }
 
     private fun doDecode() {
         val input = inputEditText.text.toString()
         if (input.isEmpty()) {
-            Toast.makeText(this, "Введите текст для декодирования", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Enter text...", Toast.LENGTH_SHORT).show()
             return
         }
 
@@ -146,8 +146,7 @@ class KanjiMapperActivity : AppCompatActivity() {
 
         val out = sb.toString()
         inputEditText.setText(out)
-        copyToClipboard(out)
-        Toast.makeText(this, "Декодировано и скопировано в буфер обмена", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "Decoded", Toast.LENGTH_SHORT).show()
     }
 
     private fun copyToClipboard(text: String) {
