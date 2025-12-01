@@ -556,6 +556,45 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ==== NEW: random {cmd1-cmd2-cmd3} command ====
+        if (inputToken == "random") {
+            // syntax: random {cmd1-cmd2-cmd3}
+            val afterBrace = command.substringAfter('{', "").substringBefore('}', "")
+            if (afterBrace.isBlank()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: random {cmd1-cmd2-cmd3}. Example: random {echo hi - sleep 1s - date}\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: random usage"
+            }
+            // split by '-' and trim options
+            val options = afterBrace.split('-').map { it.trim() }.filter { it.isNotEmpty() }
+            if (options.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: no options found inside {}\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: random no options"
+            }
+            // choose one randomly
+            val idx = kotlin.random.Random.nextInt(options.size)
+            val chosen = options[idx]
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Random chose: \"$chosen\"\n", infoColor))
+                scrollToBottom()
+            }
+            // execute chosen command and return its result
+            return try {
+                runSingleCommand(chosen)
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: failed to run chosen command: ${t.message}\n", errorColor))
+                    scrollToBottom()
+                }
+                "Error: random execution failed"
+            }
+        }
+
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
