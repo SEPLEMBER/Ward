@@ -109,7 +109,7 @@ Available commands:
   cmp                  - (see Files) compare files
   diff [-u] [-c <n>] [-i] <f1> <f2> - show textual differences with options (unified/context/ignore-case)
   grep [-r] [-i] [-l] [-n] <pattern> <path> - search text in files (recursive, ignore case, names only, show line numbers)
-  head                 - (see Files)
+  head                 - (see Files) 
   hash utilities       - use checksum/sha256/md5 commands for hashing
   rev                  - reverse file lines
   sort-lines <file> [--unique] [--reverse] [--inplace] - sort lines in file
@@ -160,11 +160,14 @@ Available commands:
   (Encryption is a convenience feature; responsibility for secure passwords lies with the user.)
 
 Notes:
-  - runsyd reads scripts from SAF root → 'scripts' directory (tries name.syd, name.sh, name.txt).
+  - runsyd reads scripts from SAF root → 'scripts' directory (tries name.syd, name.sh, name.txt). Supports both specifying the file extension and omitting it — e.g. you can run "runsyd scriptname" or "runsyd scriptname.syd".
   - pm uninstall starts system uninstall flow (user must confirm each uninstall dialog).
   - resetup opens UI that iterates package list and launches system uninstall dialogs one-by-one.
   - many file operations support SAF paths or relative paths from the configured work directory.
   - aliases are local to the app and do not affect the system shell.
+  - Command sequences are supported: commands of the form 'cmd1; cmd2; cmd3' run sequentially. Groups prefixed with 'parallel:' such as 'parallel: cmd1; cmd2; cmd3' run concurrently. Commands that include '&' (for example 'cmd1 & cmd2; cmd3') behave as backgrounded or non-blocking tasks — useful when, for example, you need to start an Activity without stopping the rest of the chain.
+  - Supports the 'button' command: 'button (Question text - Option1=cmd1 - Option2=cmd2 - ...)', using '-' as the separator between parts. If a 'button(...)' appears in a command chain (for example 'button(...); othercommand'), the following commands will be paused until the user selects one of the options. After a choice is made the chain resumes, and the command associated with the chosen option is appended to the chain (executed as if the user had entered it by pressing the button).
+  - Supports the 'random {cmd1-cmd2-cmd3}' command. This runs a randomly selected command from the provided list.
 
 """.trimIndent()
 
