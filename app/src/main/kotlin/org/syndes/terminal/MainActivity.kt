@@ -61,6 +61,11 @@ class MainActivity : AppCompatActivity() {
 
     private val PREFS_NAME = "terminal_prefs"
 
+    // For controlling glow specifically on the terminal output
+    private var terminalGlowEnabled = true
+    private var terminalGlowColor = Color.parseColor("#00FFF7")
+    private var terminalGlowRadius = 6f
+
     // список "тяжёлых" команд, которые нужно выполнять в IO
     private val heavyCommands = setOf(
         "rm", "cp", "mv", "replace", "encrypt", "decrypt", "cmp", "diff",
@@ -74,10 +79,9 @@ class MainActivity : AppCompatActivity() {
             try {
                 val cmd = intent?.getStringExtra("cmd") ?: return
                 val result = intent.getStringExtra("result") ?: ""
-                runOnUiThread {
-                    terminalOutput.append(colorize("\n[watchdog:$cmd] $result\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)))
-                    scrollToBottom()
-                }
+                // use appendToTerminal which handles glow disabling for errors
+                val infoColor = ContextCompat.getColor(this@MainActivity, R.color.color_info)
+                appendToTerminal(colorize("\n[watchdog:$cmd] $result\n", infoColor), infoColor)
             } catch (t: Throwable) {
                 // intentionally silent (logging removed)
             }
@@ -126,7 +130,7 @@ class MainActivity : AppCompatActivity() {
 
         // Вступительное сообщение (подсветка info)
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
-        terminalOutput.append(colorize("Welcome to Syndes Terminal!\nType 'help' to see commands.\n\n", infoColor))
+        appendToTerminal(colorize("Welcome to Syndes Terminal!\nType 'help' to see commands.\n\n", infoColor), infoColor)
 
         // Переопределяем кнопку: текстовый вид, жёлтый цвет (вшитый)
         sendButton.text = "RUN"
@@ -135,9 +139,11 @@ class MainActivity : AppCompatActivity() {
         sendButton.setBackgroundColor(Color.TRANSPARENT)
 
         // --- Apply subtle neon/glow effects (safe presets) ---
-        // terminal output: cyan-ish glow (subtle)
-        val neonCyan = Color.parseColor("#00FFF7")
-        applyNeon(terminalOutput, neonCyan, radius = 6f)
+        // terminal output: cyan-ish glow (subtle) - save values for later toggling
+        terminalGlowColor = Color.parseColor("#00FFF7")
+        terminalGlowRadius = 6f
+        terminalGlowEnabled = true
+        applyNeon(terminalOutput, terminalGlowColor, radius = terminalGlowRadius)
 
         // progress text: warm yellow glow
         applyNeon(progressText, embeddedYellow, radius = 5f)
@@ -243,11 +249,11 @@ class MainActivity : AppCompatActivity() {
             when (item) {
                 is CommandItem.Single -> {
                     commandQueue.addLast(item)
-                    terminalOutput.append(colorize("\n> ${item.command}${if (item.background) " &" else ""}\n", inputColor))
+                    appendToTerminal(colorize("\n> ${item.command}${if (item.background) " &" else ""}\n", inputColor), inputColor)
                 }
                 is CommandItem.Parallel -> {
                     commandQueue.addLast(item)
-                    terminalOutput.append(colorize("\n> parallel { ${item.commands.joinToString(" ; ")} }\n", inputColor))
+                    appendToTerminal(colorize("\n> parallel { ${item.commands.joinToString(" ; ")} }\n", inputColor), inputColor)
                 }
             }
         }
@@ -327,7 +333,7 @@ class MainActivity : AppCompatActivity() {
 
         // UI feedback
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
-        terminalOutput.append(colorize("\n[STOP] queue stopped and cleared\n", infoColor))
+        appendToTerminal(colorize("\n[STOP] queue stopped and cleared\n", infoColor), infoColor)
         scrollToBottom()
         hideProgress()
         stopQueueButton?.visibility = View.GONE
@@ -367,7 +373,7 @@ class MainActivity : AppCompatActivity() {
                             if (hasIntentCommands) {
                                 val err = ContextCompat.getColor(this@MainActivity, R.color.color_error)
                                 withContext(Dispatchers.Main) {
-                                    terminalOutput.append(colorize("Error: cannot run uninstall or intent-based commands in parallel group. Skipping parallel group.\n", err))
+                                    appendToTerminal(colorize("Error: cannot run uninstall or intent-based commands in parallel group. Skipping parallel group.\n", err), err)
                                 }
                                 continue
                             }
@@ -379,7 +385,7 @@ class MainActivity : AppCompatActivity() {
                                     } catch (t: Throwable) {
                                         val err = ContextCompat.getColor(this@MainActivity, R.color.color_error)
                                         withContext(Dispatchers.Main) {
-                                            terminalOutput.append(colorize("Error (parallel): ${t.message}\n", err))
+                                            appendToTerminal(colorize("Error (parallel): ${t.message}\n", err), err)
                                         }
                                     }
                                 }
@@ -391,8 +397,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (t: Throwable) {
                     val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("Error: failed to execute item : ${t.message}\n", errorColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("Error: failed to execute item : ${t.message}\n", errorColor), errorColor)
                     }
                 }
             }
@@ -421,8 +426,7 @@ class MainActivity : AppCompatActivity() {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (parts.size < 2) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: sleep <duration>. Examples: sleep 5s | sleep 200ms | sleep 2m\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: sleep <duration>. Examples: sleep 5s | sleep 200ms | sleep 2m\n", errorColor), errorColor)
                 }
                 return "Error: sleep usage"
             }
@@ -430,14 +434,12 @@ class MainActivity : AppCompatActivity() {
             val millis = parseDurationToMillis(durTok)
             if (millis <= 0L) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: invalid duration '$durTok'\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: invalid duration '$durTok'\n", errorColor), errorColor)
                 }
                 return "Error: invalid duration"
             }
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Sleeping ${millis}ms...\n", systemYellow))
-                scrollToBottom()
+                appendToTerminal(colorize("Sleeping ${millis}ms...\n", systemYellow), systemYellow)
             }
             // suspend without blocking UI
             var remaining = millis
@@ -448,8 +450,7 @@ class MainActivity : AppCompatActivity() {
                 remaining -= to
             }
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Done sleep ${durTok}\n", infoColor))
-                scrollToBottom()
+                appendToTerminal(colorize("Done sleep ${durTok}\n", infoColor), infoColor)
             }
             return "Info: slept ${durTok}"
         }
@@ -459,8 +460,7 @@ class MainActivity : AppCompatActivity() {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (parts.size < 2) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: runsyd <name>  (looks for name.syd in scripts folder)\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: runsyd <name>  (looks for name.syd in scripts folder)\n", errorColor), errorColor)
                 }
                 return "Error: runsyd usage"
             }
@@ -470,8 +470,7 @@ class MainActivity : AppCompatActivity() {
             val safRoot = prefs.getString("work_dir_uri", null) ?: prefs.getString("current_dir_uri", null)
             if (safRoot.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: SAF root not configured. Set scripts folder in settings (work_dir_uri/current_dir_uri).\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: SAF root not configured. Set scripts folder in settings (work_dir_uri/current_dir_uri).\n", errorColor), errorColor)
                 }
                 return "Error: saf not configured"
             }
@@ -479,16 +478,14 @@ class MainActivity : AppCompatActivity() {
                 val tree = DocumentFile.fromTreeUri(this, Uri.parse(safRoot))
                 if (tree == null || !tree.isDirectory) {
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("Error: cannot access SAF root (invalid URI)\n", errorColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("Error: cannot access SAF root (invalid URI)\n", errorColor), errorColor)
                     }
                     return "Error: saf root invalid"
                 }
                 val scriptsDir = tree.findFile("scripts")?.takeIf { it.isDirectory }
                 if (scriptsDir == null) {
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("Error: 'scripts' folder not found under SAF root\n", errorColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("Error: 'scripts' folder not found under SAF root\n", errorColor), errorColor)
                     }
                     return "Error: scripts folder missing"
                 }
@@ -511,8 +508,7 @@ class MainActivity : AppCompatActivity() {
 
                 if (found == null) {
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor), errorColor)
                     }
                     return "Error: script not found"
                 }
@@ -529,8 +525,7 @@ class MainActivity : AppCompatActivity() {
                     }
                 } ?: run {
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("Error: cannot open script file\n", errorColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("Error: cannot open script file\n", errorColor), errorColor)
                     }
                     return "Error: cannot open"
                 }
@@ -541,16 +536,14 @@ class MainActivity : AppCompatActivity() {
                 withContext(Dispatchers.Main) {
                     inputField.setText(content)
                     inputField.setSelection(inputField.text.length)
-                    terminalOutput.append(colorize("Loaded script '${found.name}' — injecting commands...\n", infoColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Loaded script '${found.name}' — injecting commands...\n", infoColor), infoColor)
                     // call sendCommand to enqueue commands from file (this will add commands while we're processing)
                     sendCommand()
                 }
                 return "Info: runsyd loaded ${found.name}"
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: failed to read script: ${t.message}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: failed to read script: ${t.message}\n", errorColor), errorColor)
                 }
                 return "Error: runsyd failed"
             }
@@ -562,8 +555,7 @@ class MainActivity : AppCompatActivity() {
             val afterBrace = command.substringAfter('{', "").substringBefore('}', "")
             if (afterBrace.isBlank()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: random {cmd1-cmd2-cmd3}. Example: random {echo hi - sleep 1s - date}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: random {cmd1-cmd2-cmd3}. Example: random {echo hi - sleep 1s - date}\n", errorColor), errorColor)
                 }
                 return "Error: random usage"
             }
@@ -571,8 +563,7 @@ class MainActivity : AppCompatActivity() {
             val options = afterBrace.split('-').map { it.trim() }.filter { it.isNotEmpty() }
             if (options.isEmpty()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: no options found inside {}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: no options found inside {}\n", errorColor), errorColor)
                 }
                 return "Error: random no options"
             }
@@ -580,16 +571,14 @@ class MainActivity : AppCompatActivity() {
             val idx = kotlin.random.Random.nextInt(options.size)
             val chosen = options[idx]
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Random chose: \"$chosen\"\n", infoColor))
-                scrollToBottom()
+                appendToTerminal(colorize("Random chose: \"$chosen\"\n", infoColor), infoColor)
             }
             // execute chosen command and return its result
             return try {
                 runSingleCommand(chosen)
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: failed to run chosen command: ${t.message}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: failed to run chosen command: ${t.message}\n", errorColor), errorColor)
                 }
                 "Error: random execution failed"
             }
@@ -601,8 +590,7 @@ class MainActivity : AppCompatActivity() {
             val inside = command.substringAfter('(', "").substringBefore(')', "").trim()
             if (inside.isBlank()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: button (echo: Your question - Option1=cmd1 - Option2=cmd2 - ...)\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: button (echo: Your question - Option1=cmd1 - Option2=cmd2 - ...)\n", errorColor), errorColor)
                 }
                 return "Error: button usage"
             }
@@ -611,8 +599,7 @@ class MainActivity : AppCompatActivity() {
             val parts = inside.split('-').map { it.trim() }.filter { it.isNotEmpty() }
             if (parts.isEmpty()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: button: no parts found\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: button: no parts found\n", errorColor), errorColor)
                 }
                 return "Error: button parse"
             }
@@ -639,8 +626,7 @@ class MainActivity : AppCompatActivity() {
 
             if (opts.isEmpty()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: button: no options provided (use Option=cmd)\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: button: no options provided (use Option=cmd)\n", errorColor), errorColor)
                 }
                 return "Error: button no options"
             }
@@ -653,7 +639,8 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val root = findViewById<ViewGroup>(android.R.id.content)
                     val overlay = FrameLayout(this@MainActivity).apply {
-                        setBackgroundColor(Color.parseColor("#80000000")) // semi-transparent dark
+                        // semi-transparent matte dark overlay: alpha + #0A0A0A
+                        setBackgroundColor(Color.parseColor("#800A0A0A")) // alpha 0x80 + #0A0A0A
                         isClickable = true // consume touches
                     }
 
@@ -667,13 +654,13 @@ class MainActivity : AppCompatActivity() {
                             Gravity.CENTER
                         )
                         layoutParams = lp
-                        // light panel background
-                        setBackgroundColor(Color.WHITE)
+                        // matte dark panel background for button area
+                        setBackgroundColor(Color.parseColor("#0A0A0A"))
                     }
 
                     val tv = TextView(this@MainActivity).apply {
                         text = question
-                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info)) // keep message color
                         setTextIsSelectable(false)
                         val padv = (8 * resources.displayMetrics.density).toInt()
                         setPadding(padv, padv, padv, padv)
@@ -688,6 +675,8 @@ class MainActivity : AppCompatActivity() {
                         val b = Button(this@MainActivity).apply {
                             text = label
                             isAllCaps = false
+                            setTextColor(Color.WHITE) // make button text white
+                            setBackgroundColor(Color.TRANSPARENT)
                             setOnClickListener {
                                 // complete with command
                                 try {
@@ -697,7 +686,7 @@ class MainActivity : AppCompatActivity() {
                                 try { root.removeView(overlay) } catch (_: Throwable) { }
                             }
                         }
-                        // subtle neon for each button
+                        // keep neon on buttons if desired (does not affect terminal glow)
                         try { applyNeon(b, Color.parseColor("#00FFF7"), radius = 4f) } catch (_: Throwable) {}
                         val blp = LinearLayout.LayoutParams(
                             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -718,13 +707,11 @@ class MainActivity : AppCompatActivity() {
                     overlayView = overlay
 
                     // Also print question into terminal so user sees context in output
-                    terminalOutput.append(colorize("\n[button] $question\n", infoColor))
-                    terminalOutput.append(colorize("[button] choose one of: ${opts.map { it.first }.joinToString(", ")}\n", infoColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("\n[button] $question\n", infoColor), infoColor)
+                    appendToTerminal(colorize("[button] choose one of: ${opts.map { it.first }.joinToString(", ")}\n", infoColor), infoColor)
                 } catch (t: Throwable) {
                     // UI creation failed
-                    terminalOutput.append(colorize("Error: cannot show button UI: ${t.message}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: cannot show button UI: ${t.message}\n", errorColor), errorColor)
                     selection.complete(null)
                 }
             }
@@ -748,15 +735,13 @@ class MainActivity : AppCompatActivity() {
 
             if (chosenCmd.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Button selection cancelled or failed\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Button selection cancelled or failed\n", errorColor), errorColor)
                 }
                 return "Error: button cancelled"
             }
 
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Button selected — executing: $chosenCmd\n", infoColor))
-                scrollToBottom()
+                appendToTerminal(colorize("Button selected — executing: $chosenCmd\n", infoColor), infoColor)
             }
 
             // execute chosen command (this will block queue until it finishes)
@@ -764,8 +749,7 @@ class MainActivity : AppCompatActivity() {
                 runSingleCommand(chosenCmd)
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: failed to execute chosen command: ${t.message}\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: failed to execute chosen command: ${t.message}\n", errorColor), errorColor)
                 }
                 "Error: button execution failed"
             }
@@ -774,14 +758,12 @@ class MainActivity : AppCompatActivity() {
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("Scheduling watchdog: $command\n", infoColor))
-                scrollToBottom()
+                appendToTerminal(colorize("Scheduling watchdog: $command\n", infoColor), infoColor)
             }
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (parts.size < 3) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: watchdog <duration> <command...>\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: watchdog <duration> <command...>\n", errorColor), errorColor)
                 }
                 return "Error: invalid watchdog syntax"
             }
@@ -790,8 +772,7 @@ class MainActivity : AppCompatActivity() {
             val durSec = parseDurationToSeconds(durToken)
             if (durSec <= 0L) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Error: invalid duration '$durToken'\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Error: invalid duration '$durToken'\n", errorColor), errorColor)
                 }
                 return "Error: invalid duration"
             }
@@ -807,14 +788,12 @@ class MainActivity : AppCompatActivity() {
                     startService(svcIntent)
                 }
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Watchdog service started: will run \"$targetCmd\" in $durToken\n", infoColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Watchdog service started: will run \"$targetCmd\" in $durToken\n", infoColor), infoColor)
                 }
                 return "Info: watchdog scheduled"
             } catch (t: Throwable) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Warning: cannot start watchdog service, falling back to in-app timer (may be cancelled when app backgrounded)\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Warning: cannot start watchdog service, falling back to in-app timer (may be cancelled when app backgrounded)\n", errorColor), errorColor)
                 }
                 // fallback: schedule reinjection
                 lifecycleScope.launch {
@@ -857,8 +836,7 @@ class MainActivity : AppCompatActivity() {
                         if (!processingQueue) processCommandQueue()
                     } catch (_: Throwable) {
                         withContext(Dispatchers.Main) {
-                            terminalOutput.append(colorize("Error: watchdog fallback failed\n", errorColor))
-                            scrollToBottom()
+                            appendToTerminal(colorize("Error: watchdog fallback failed\n", errorColor), errorColor)
                         }
                     } finally {
                         withContext(Dispatchers.Main) {
@@ -875,7 +853,6 @@ class MainActivity : AppCompatActivity() {
         if (command.equals("clear", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
                 terminalOutput.text = ""
-                scrollToBottom()
             }
             val maybe = try {
                 withContext(Dispatchers.Main) { terminal.execute(command, this@MainActivity) }
@@ -884,8 +861,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (maybe != null && !maybe.startsWith("Info: Screen cleared.", ignoreCase = true)) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize(maybe + "\n", infoColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize(maybe + "\n", infoColor), infoColor)
                 }
             }
             return maybe ?: "Info: screen cleared"
@@ -894,8 +870,7 @@ class MainActivity : AppCompatActivity() {
         // exit
         if (command.equals("exit", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
-                terminalOutput.append(colorize("shutting down...\n", infoColor))
-                scrollToBottom()
+                appendToTerminal(colorize("shutting down...\n", infoColor), infoColor)
             }
             delay(300)
             withContext(Dispatchers.Main) {
@@ -909,8 +884,7 @@ class MainActivity : AppCompatActivity() {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
             if (parts.size < 2) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Usage: uninstall <package.name>\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Usage: uninstall <package.name>\n", errorColor), errorColor)
                 }
                 return "Error: uninstall usage"
             }
@@ -923,8 +897,7 @@ class MainActivity : AppCompatActivity() {
             }
             if (!installed) {
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Not installed: $pkg\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("Not installed: $pkg\n", errorColor), errorColor)
                 }
                 return "Error: not installed"
             }
@@ -939,7 +912,7 @@ class MainActivity : AppCompatActivity() {
                 // wait until activity result arrives or stop requested
                 pendingIntentCompletion?.await()
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("Uninstall flow finished for $pkg\n", infoColor))
+                    appendToTerminal(colorize("Uninstall flow finished for $pkg\n", infoColor), infoColor)
                 }
                 val stillInstalled = try {
                     packageManager.getPackageInfo(pkg, 0)
@@ -950,15 +923,13 @@ class MainActivity : AppCompatActivity() {
                 val msg = if (!stillInstalled) {
                     val s = "Info: package removed: $pkg"
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("$s\n", infoColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("$s\n", infoColor), infoColor)
                     }
                     s
                 } else {
                     val s = "Info: package still installed: $pkg"
                     withContext(Dispatchers.Main) {
-                        terminalOutput.append(colorize("$s\n", defaultColor))
-                        scrollToBottom()
+                        appendToTerminal(colorize("$s\n", defaultColor), defaultColor)
                     }
                     s
                 }
@@ -967,8 +938,7 @@ class MainActivity : AppCompatActivity() {
                 pendingIntentCompletion = null
                 val errMsg = "Error: cannot launch uninstall for $pkg: ${t.message}"
                 withContext(Dispatchers.Main) {
-                    terminalOutput.append(colorize("$errMsg\n", errorColor))
-                    scrollToBottom()
+                    appendToTerminal(colorize("$errMsg\n", errorColor), errorColor)
                 }
                 return errMsg
             }
@@ -1080,7 +1050,7 @@ class MainActivity : AppCompatActivity() {
                 firstToken in setOf("mem", "device", "uname", "uptime", "date") -> systemYellow
                 else -> defaultColor
             }
-            terminalOutput.append(colorize(result + "\n", resultColor))
+            appendToTerminal(colorize(result + "\n", resultColor), resultColor)
         }
 
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1163,6 +1133,47 @@ class MainActivity : AppCompatActivity() {
             Spanned.SPAN_EXCLUSIVE_EXCLUSIVE
         )
         return spannable
+    }
+
+    /**
+     * Append text to terminalOutput, but ensure that if the color equals the error color,
+     * terminal glow is temporarily disabled for that append. This enforces "no glow for red text".
+     */
+    private fun appendToTerminal(sp: SpannableStringBuilder, color: Int) {
+        val errorColor = ContextCompat.getColor(this@MainActivity, R.color.color_error)
+        val needDisableGlow = (color == errorColor)
+        // run on UI thread (safe to call from any thread)
+        runOnUiThread {
+            val prevGlow = terminalGlowEnabled
+            if (needDisableGlow && prevGlow) {
+                // temporarily disable glow
+                setTerminalGlowEnabled(false)
+            }
+            try {
+                terminalOutput.append(sp)
+            } finally {
+                if (needDisableGlow && prevGlow) {
+                    // restore glow
+                    setTerminalGlowEnabled(true)
+                }
+            }
+            scrollToBottom()
+        }
+    }
+
+    // Устанавливает глобально свечение для terminalOutput (в UI-потоке)
+    private fun setTerminalGlowEnabled(enabled: Boolean) {
+        try {
+            if (enabled) {
+                // restore glow
+                terminalOutput.setShadowLayer(terminalGlowRadius, 0f, 0f, terminalGlowColor)
+                terminalGlowEnabled = true
+            } else {
+                // disable glow
+                terminalOutput.setShadowLayer(0f, 0f, 0f, Color.TRANSPARENT)
+                terminalGlowEnabled = false
+            }
+        } catch (_: Throwable) { /* ignore */ }
     }
 
     private fun scrollToBottom() {
