@@ -227,7 +227,7 @@ Hello!   \__/'---'\__/
                     }
 
                     "справка", "ruhelp", "туториал", "инструкция", "помощь" -> {
-                        val intent = Intent(ctx, RuTutorialActivity::class.java) // TODO: switch to TutorialActivity when available
+                        val intent = Intent(ctx, RuTutorialActivity::class.java) // TODO: switch to RuTutorialActivity when available
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         ctx.startActivity(intent)
                         null
@@ -235,6 +235,13 @@ Hello!   \__/'---'\__/
 
                     "resetup", "batch uninstall" -> {
                         val intent = Intent(ctx, ResetupActivity::class.java) // TODO: switch to TutorialActivity when available
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    }
+
+                    "obs64", "KanjiMapper" -> {
+                        val intent = Intent(ctx, KanjiMapperActivity::class.java) // TODO: switch to KanjiMapperActivity when available
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                         ctx.startActivity(intent)
                         null
