@@ -595,6 +595,182 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // ==== NEW: button (echo: Question - opt1=cmd1 - opt2=cmd2 - ...) ====
+        if (inputToken == "button") {
+            // extract text inside parentheses
+            val inside = command.substringAfter('(', "").substringBefore(')', "").trim()
+            if (inside.isBlank()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Usage: button (echo: Your question - Option1=cmd1 - Option2=cmd2 - ...)\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: button usage"
+            }
+
+            // split by '-' delimiter: first part is question (may start with 'echo:')
+            val parts = inside.split('-').map { it.trim() }.filter { it.isNotEmpty() }
+            if (parts.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: button: no parts found\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: button parse"
+            }
+
+            var question = parts[0]
+            if (question.lowercase().startsWith("echo:")) {
+                question = question.substringAfter(":", "").trim()
+            }
+
+            // parse options: label=command
+            val opts = parts.drop(1).mapNotNull { p ->
+                val eq = p.indexOf('=')
+                if (eq <= 0) {
+                    // If no '=', treat the whole token as both label and command
+                    val lab = p
+                    val cmd = p
+                    lab to cmd
+                } else {
+                    val lab = p.substring(0, eq).trim()
+                    val cmd = p.substring(eq + 1).trim()
+                    if (lab.isEmpty() || cmd.isEmpty()) null else lab to cmd
+                }
+            }
+
+            if (opts.isEmpty()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: button: no options provided (use Option=cmd)\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: button no options"
+            }
+
+            val selection = CompletableDeferred<String?>()
+            var overlayView: View? = null
+
+            // create modal overlay with question and buttons (on main thread)
+            withContext(Dispatchers.Main) {
+                try {
+                    val root = findViewById<ViewGroup>(android.R.id.content)
+                    val overlay = FrameLayout(this@MainActivity).apply {
+                        setBackgroundColor(Color.parseColor("#80000000")) // semi-transparent dark
+                        isClickable = true // consume touches
+                    }
+
+                    val container = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                        val pad = (16 * resources.displayMetrics.density).toInt()
+                        setPadding(pad, pad, pad, pad)
+                        val lp = FrameLayout.LayoutParams(
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            FrameLayout.LayoutParams.WRAP_CONTENT,
+                            Gravity.CENTER
+                        )
+                        layoutParams = lp
+                        // light panel background
+                        setBackgroundColor(Color.WHITE)
+                    }
+
+                    val tv = TextView(this@MainActivity).apply {
+                        text = question
+                        setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                        setTextIsSelectable(false)
+                        val padv = (8 * resources.displayMetrics.density).toInt()
+                        setPadding(padv, padv, padv, padv)
+                    }
+                    container.addView(tv)
+
+                    // buttons column (vertical) — supports many options
+                    val btnCol = LinearLayout(this@MainActivity).apply {
+                        orientation = LinearLayout.VERTICAL
+                    }
+                    for ((label, cmd) in opts) {
+                        val b = Button(this@MainActivity).apply {
+                            text = label
+                            isAllCaps = false
+                            setOnClickListener {
+                                // complete with command
+                                try {
+                                    selection.complete(cmd)
+                                } catch (_: Throwable) { /* ignore */ }
+                                // remove overlay
+                                try { root.removeView(overlay) } catch (_: Throwable) { }
+                            }
+                        }
+                        // subtle neon for each button
+                        try { applyNeon(b, Color.parseColor("#00FFF7"), radius = 4f) } catch (_: Throwable) {}
+                        val blp = LinearLayout.LayoutParams(
+                            LinearLayout.LayoutParams.MATCH_PARENT,
+                            LinearLayout.LayoutParams.WRAP_CONTENT
+                        ).apply {
+                            topMargin = (6 * resources.displayMetrics.density).toInt()
+                        }
+                        btnCol.addView(b, blp)
+                    }
+                    container.addView(btnCol)
+
+                    overlay.addView(container)
+                    root.addView(overlay, FrameLayout.LayoutParams(
+                        FrameLayout.LayoutParams.MATCH_PARENT,
+                        FrameLayout.LayoutParams.MATCH_PARENT
+                    ))
+
+                    overlayView = overlay
+
+                    // Also print question into terminal so user sees context in output
+                    terminalOutput.append(colorize("\n[button] $question\n", infoColor))
+                    terminalOutput.append(colorize("[button] choose one of: ${opts.map { it.first }.joinToString(", ")}\n", infoColor))
+                    scrollToBottom()
+                } catch (t: Throwable) {
+                    // UI creation failed
+                    terminalOutput.append(colorize("Error: cannot show button UI: ${t.message}\n", errorColor))
+                    scrollToBottom()
+                    selection.complete(null)
+                }
+            }
+
+            // wait for selection or cancellation
+            val chosenCmd: String? = try {
+                selection.await()
+            } catch (t: Throwable) {
+                null
+            } finally {
+                // cleanup overlay if still present
+                withContext(Dispatchers.Main) {
+                    try {
+                        overlayView?.let { rootView ->
+                            val root = findViewById<ViewGroup>(android.R.id.content)
+                            root.removeView(rootView)
+                        }
+                    } catch (_: Throwable) { /* ignore */ }
+                }
+            }
+
+            if (chosenCmd.isNullOrBlank()) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Button selection cancelled or failed\n", errorColor))
+                    scrollToBottom()
+                }
+                return "Error: button cancelled"
+            }
+
+            withContext(Dispatchers.Main) {
+                terminalOutput.append(colorize("Button selected — executing: $chosenCmd\n", infoColor))
+                scrollToBottom()
+            }
+
+            // execute chosen command (this will block queue until it finishes)
+            return try {
+                runSingleCommand(chosenCmd)
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    terminalOutput.append(colorize("Error: failed to execute chosen command: ${t.message}\n", errorColor))
+                    scrollToBottom()
+                }
+                "Error: button execution failed"
+            }
+        }
+
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
