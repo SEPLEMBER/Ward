@@ -226,6 +226,13 @@ Hello!   \__/'---'\__/
                         null
                     }
 
+                    "справка", "ruhelp", "туториал", "инструкция", "помощь" -> {
+                        val intent = Intent(ctx, RuTutorialActivity::class.java) // TODO: switch to TutorialActivity when available
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    }
+
                     "resetup", "batch uninstall" -> {
                         val intent = Intent(ctx, ResetupActivity::class.java) // TODO: switch to TutorialActivity when available
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
