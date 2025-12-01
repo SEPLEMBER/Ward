@@ -51,6 +51,12 @@
             android:name=".ResetupActivity"
             android:exported="false"
             android:theme="@style/AppTheme" />
+
+        <activity
+    android:name=".KanjiMapperActivity"
+    android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
+    android:exported="false" />
+
         
         <!-- foreground-service for watchdog -->
         <service
