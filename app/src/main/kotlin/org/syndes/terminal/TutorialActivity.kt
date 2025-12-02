@@ -168,6 +168,18 @@ Notes:
   - Command sequences are supported: commands of the form 'cmd1; cmd2; cmd3' run sequentially. Groups prefixed with 'parallel:' such as 'parallel: cmd1; cmd2; cmd3' run concurrently. Commands that include '&' (for example 'cmd1 & cmd2; cmd3') behave as backgrounded or non-blocking tasks — useful when, for example, you need to start an Activity without stopping the rest of the chain.
   - Supports the 'button' command: 'button (Question text - Option1=cmd1 - Option2=cmd2 - ...)', using '-' as the separator between parts. If a 'button(...)' appears in a command chain (for example 'button(...); othercommand'), the following commands will be paused until the user selects one of the options. After a choice is made the chain resumes, and the command associated with the chosen option is appended to the chain (executed as if the user had entered it by pressing the button).
   - Supports the 'random {cmd1-cmd2-cmd3}' command. This runs a randomly selected command from the provided list.
+  
+  - SyPL Compiler extends the terminal functions with the following commands:
+  - `if <left> = <right> then <command>` with `else <command>` support. `then` executes the specified command as if the user typed it manually (including waits/blocks). `else` refers to the entire sequence of consecutive `if` statements (as long as there are no other commands between them) and is executed only if none of the previous `if` statements in the chain have triggered. Examples with `echo`: `if 1 = 1 then echo ok` — will trigger and output `ok` (literal comparison).
+  - `echo hello` `if echo hello = whatever then echo prev_cmd_matched` — will trigger because the last executed command is being compared. `echo hi` `if hi = hi then echo result_matched` — will trigger because the last command result is being compared. Chain:
+    - `if cmdA = x then echo A`
+    - `if cmdB = y then echo B`
+    `else echo fallback`
+    — `else` will execute only if neither `A` nor `B` was triggered.
+  - cycle support exists. Supported forms:
+  - `cycle <N>t <interval>=<cmd>` — execute `<cmd>` N times with `<interval>` pause between executions. Examples: `cycle 10t 3ms=echo hi`, `cycle 5t 2s=echo tick`. Time suffixes `ms`, `s`, `m` are supported.
+  - `cycle next <Mi>i <N>t=<cmd>` — execute `<cmd>` N times, each time after `Mi` commands have been processed (i.e., after the specified number of processed commands). Example: `cycle next 3i 7t=echo every3` — the command `echo every3` will be injected and executed 7 times, each time after processing 3 commands.
+  - cycles are scheduled as background tasks and add commands to the execution queue according to their schedule/trigger.
 
 """.trimIndent()
 
