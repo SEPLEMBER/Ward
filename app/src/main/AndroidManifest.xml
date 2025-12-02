@@ -52,6 +52,11 @@
             android:exported="false"
             android:theme="@style/AppTheme" />
 
+                            <activity
+            android:name=".SyPLComActivity"
+            android:exported="false"
+            android:theme="@style/AppTheme" />
+
         <activity
     android:name=".KanjiMapperActivity"
     android:theme="@style/Theme.AppCompat.DayNight.NoActionBar"
