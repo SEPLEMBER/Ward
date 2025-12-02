@@ -240,6 +240,13 @@ Hello!   \__/'---'\__/
                         null
                     }
 
+                    "SyPL", "SyCompiler" -> {
+                        val intent = Intent(ctx, SyPLComActivity::class.java) // TODO: switch to TutorialActivity when available
+                        if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        ctx.startActivity(intent)
+                        null
+                    }
+
                     "obs64", "KanjiMapper" -> {
                         val intent = Intent(ctx, KanjiMapperActivity::class.java) // TODO: switch to KanjiMapperActivity when available
                         if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
