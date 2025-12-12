@@ -57,7 +57,39 @@ class SyPLComActivity : AppCompatActivity() {
 
     private var progressJob: Job? = null
 
-    private val terminal = TerminalDispatcher()
+    // Диспетчер двух терминалов (обязательных)
+private val terminals = listOf(
+    Terminal(),
+    Terminal2()
+)
+
+// Унифицированный вызов
+private fun runCommand(command: String, ctx: Context): String {
+    for (t in terminals) {
+        try {
+            val m = t.javaClass.methods.firstOrNull { m ->
+                m.name == "execute" &&
+                m.parameterCount == 2 &&
+                m.parameterTypes[0] == String::class.java
+            }
+
+            if (m != null) {
+                val res = m.invoke(t, command, ctx)
+                val out = when (res) {
+                    null -> ""
+                    is Unit -> ""
+                    else -> res.toString()
+                }
+                if (out.isNotEmpty()) return out   // ← команда обработана
+            }
+        } catch (_: Exception) {
+            // если этот backend упал — просто пробуем следующий
+        }
+    }
+
+    return "Error: command not found"
+}
+
 
     private val PREFS_NAME = "terminal_prefs"
 
