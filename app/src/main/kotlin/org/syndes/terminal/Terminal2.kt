@@ -8,7 +8,7 @@ import android.provider.Settings
 // Команда "vpd" возвращает "7" и открывает системные настройки клавиатуры.
 class Terminal2 {
 
-        private val history = mutableListOf<String>()
+    private val history = mutableListOf<String>()
 
     /**
      * Выполняет команду и возвращает текстовый результат.
@@ -39,12 +39,14 @@ class Terminal2 {
 
         // Загружаем алиасы
         val aliasesStr = prefs.getString("aliases", "") ?: ""
-        val aliases = aliasesStr.split(";").filter { it.isNotBlank() }.associate {
-            val parts = it.split("=", limit = 2)
-            parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
-        }
+        val aliases = aliasesStr.split(";")
+            .filter { it.isNotBlank() }
+            .associate {
+                val parts = it.split("=", limit = 2)
+                parts[0].trim().lowercase() to parts.getOrNull(1)?.trim().orEmpty()
+            }
 
-        // Подставляем алиас, если есть (простая подстановка первого токена)
+        // Подставляем алиас
         if (cmdName in aliases) {
             val aliasCmd = aliases[cmdName]!!
             val aliasTokens = aliasCmd.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -58,19 +60,7 @@ class Terminal2 {
             when (cmdName) {
                 "hi" -> {
                     """
-
-
-             .---.
-            /     \
-            \.@-@./
-            /`\_/`\
-           //  _  \\
-          | \     )|_
-         /`\_`>  <_/ \
-Hello!   \__/'---'\__/
-
-
-
+                        Hi, user!
                     """.trimIndent()
                 }
 
@@ -78,10 +68,21 @@ Hello!   \__/'---'\__/
                     "Info: Syndes Terminal v0.17.3"
                 }
 
-            else -> {
-                // Не обработано — возвращаем пустую строку, чтобы TerminalDispatcher мог попробовать дальше.
-                ""
+                "vpd" -> {
+                    // открыть настройки клавиатуры
+                    val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "7"
+                }
+
+                else -> {
+                    // Не обработано — продолжаем цепочку в TerminalDispatcher
+                    ""
+                }
             }
+        } catch (e: Exception) {
+            "Error: ${e.message}"
         }
     }
 }
