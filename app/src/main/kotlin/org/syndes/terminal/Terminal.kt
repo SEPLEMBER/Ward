@@ -27,9 +27,6 @@ import java.util.zip.ZipOutputStream
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
-import android.os.BatteryManager
-import android.os.Environment
-import android.content.ComponentName
 
 class Terminal {
 
@@ -1413,14 +1410,21 @@ Hello!   \__/'---'\__/
                     "Info: opening VPN settings"
                 }
 
-                "kbd" -> {
+                "btss" -> {
+                    val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
+                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    ctx.startActivity(intent)
+                    "Info: opening battery settings"
+                }
+
+"kbd" -> {
                     val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
                     "Info: opening keyboard settings"
                 }
 
-                "about" -> {
+                "aband" -> {
                     val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
@@ -1441,7 +1445,7 @@ Hello!   \__/'---'\__/
                     "Info: opening privacy settings"
                 }
 
-                "lang" -> {
+"lang" -> {
                     val intent = Intent(Settings.ACTION_LOCALE_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
@@ -1452,136 +1456,36 @@ Hello!   \__/'---'\__/
                     val intent = Intent(Settings.ACTION_HOME_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
-                    "Info: opening home screen settings"
-                }
-
-                "netop" -> {
-                    val intent = Intent(Settings.ACTION_NETWORK_OPERATOR_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening network operator settings"
-                }
-
-                "usr" -> {
-                    val intent = Intent(Settings.ACTION_USER_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening user settings"
-                }
-
-                "cast" -> {
-                    val intent = Intent(Settings.ACTION_CAST_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening cast settings"
+                    "Info: opening home screen / launcher settings"
                 }
 
                 "zen" -> {
                     val intent = Intent(Settings.ACTION_ZEN_MODE_PRIORITY_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
-                    "Info: opening Zen mode (Do Not Disturb) settings"
-                }
-
-                "print" -> {
-                    val intent = Intent(Settings.ACTION_PRINT_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening print settings"
-                }
-
-                "voice" -> {
-                    val intent = Intent(Settings.ACTION_VOICE_INPUT_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening voice input settings"
-                }
-
-                "vr" -> {
-                    val intent = Intent(Settings.ACTION_VR_LISTENER_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening VR listener settings"
-                }
-
-                "webview" -> {
-                    val intent = Intent(Settings.ACTION_WEBVIEW_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening WebView settings"
+                    "Info: opening Do Not Disturb settings"
                 }
 
                 "night" -> {
                     val intent = Intent(Settings.ACTION_NIGHT_DISPLAY_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
-                    "Info: opening night display settings"
+                    "Info: opening night light / blue light filter"
                 }
 
-                "caption" -> {
-                    val intent = Intent(Settings.ACTION_CAPTIONING_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening captioning settings"
-                }
-
-                "dream" -> {
-                    val intent = Intent(Settings.ACTION_DREAM_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening daydream (screensaver) settings"
-                }
-
-                "quick" -> {
-                    val intent = Intent(Settings.ACTION_QUICK_LAUNCH_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening quick launch settings"
-                }
-
-                "browserin" -> {
-                    val urlStr = args.joinToString(" ")
-                    val url = if (urlStr.isNotEmpty()) {
-                        if (!urlStr.startsWith("http://") && !urlStr.startsWith("https://")) "https://$urlStr" else urlStr
-                    } else {
-                        "about:blank"
-                    }
-                    val chromeIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                        setPackage("com.android.chrome")
-                        putExtra("org.chromium.chrome.browser.incognito_mode", true)
-                        if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    }
-                    try {
-                        ctx.startActivity(chromeIntent)
-                        "Info: opening $url in Chrome incognito mode"
-                    } catch (e: Throwable) {
-                        val fallbackIntent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                        if (ctx !is Activity) fallbackIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                        try {
-                            ctx.startActivity(fallbackIntent)
-                            "Info: Chrome not found or incognito not supported, opening $url in default browser"
-                        } catch (t: Throwable) {
-                            "Error: cannot open browser: ${t.message}"
-                        }
-                    }
-                }
-
-                "apse" -> {
+"apse" -> {
                     if (args.isEmpty()) return "Usage: apse <app name or package>"
                     val target = args.joinToString(" ")
-                    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target) ?: return "Error: app not found: $target"
-                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$pkg"))
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    val pkg = if (target.contains(".")) target else findPackageByName(ctx, target)
+                        ?: return "Error: app not found: $target"
+                    val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                        data = Uri.parse("package:$pkg")
+                        if (ctx !is Activity) addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
                     ctx.startActivity(intent)
-                    "Info: opening app settings for $pkg"
+                    "Info: opened settings for $pkg"
                 }
 
-                "btss" -> {
-                    val intent = Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS)
-                    if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    ctx.startActivity(intent)
-                    "Info: opening battery settings"
-                }
 
                 "wifi" -> {
                     val intent = Intent(Settings.ACTION_WIFI_SETTINGS)
@@ -1905,7 +1809,7 @@ Hello!   \__/'---'\__/
                     }
                 }
 
-                                "device" -> {
+                "device" -> {
                     val rt = Runtime.getRuntime()
                     val sb = StringBuilder()
                     sb.appendLine("Model: ${Build.MANUFACTURER} ${Build.MODEL}")
@@ -1916,130 +1820,6 @@ Hello!   \__/'---'\__/
                     sb.toString()
                 }
 
-                // ===================================================================
-                // ≡≡≡ НОВЫЕ КОМАНДЫ И СВЯЗАННЫЕ С НИМИ HELPER-ФУНКЦИИ ПИШЕМ ЗДЕСЬ ≡≡≡
-                // ===================================================================
-
-                "battery" -> {
-                    val intentFilter = IntentFilter(Intent.ACTION_BATTERY_CHANGED)
-                    val batteryIntent = ctx.registerReceiver(null, intentFilter)
-                    if (batteryIntent == null) return "Error: cannot get battery info"
-                    val level = batteryIntent.getIntExtra(BatteryManager.EXTRA_LEVEL, -1)
-                    val scale = batteryIntent.getIntExtra(BatteryManager.EXTRA_SCALE, -1)
-                    val statusInt = batteryIntent.getIntExtra(BatteryManager.EXTRA_STATUS, -1)
-                    val status = when (statusInt) {
-                        BatteryManager.BATTERY_STATUS_CHARGING -> "Charging"
-                        BatteryManager.BATTERY_STATUS_DISCHARGING -> "Discharging"
-                        BatteryManager.BATTERY_STATUS_FULL -> "Full"
-                        BatteryManager.BATTERY_STATUS_NOT_CHARGING -> "Not charging"
-                        BatteryManager.BATTERY_STATUS_UNKNOWN -> "Unknown"
-                        else -> "Unknown"
-                    }
-                    val pluggedInt = batteryIntent.getIntExtra(BatteryManager.EXTRA_PLUGGED, -1)
-                    val plugged = when (pluggedInt) {
-                        BatteryManager.BATTERY_PLUGGED_AC -> "AC"
-                        BatteryManager.BATTERY_PLUGGED_USB -> "USB"
-                        BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"
-                        0 -> "Battery"
-                        else -> "Unknown"
-                    }
-                    val healthInt = batteryIntent.getIntExtra(BatteryManager.EXTRA_HEALTH, -1)
-                    val health = when (healthInt) {
-                        BatteryManager.BATTERY_HEALTH_COLD -> "Cold"
-                        BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
-                        BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
-                        BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over voltage"
-                        BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheat"
-                        BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "Unspecified failure"
-                        BatteryManager.BATTERY_HEALTH_UNKNOWN -> "Unknown"
-                        else -> "Unknown"
-                    }
-                    val temp = batteryIntent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, -1) / 10.0
-                    val voltage = batteryIntent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, -1) / 1000.0
-                    val percent = if (level != -1 && scale != -1) (level * 100 / scale.toFloat()).toInt() else -1
-                    """
-Level: $percent%
-Status: $status
-Plugged: $plugged
-Health: $health
-Temperature: $temp °C
-Voltage: $voltage V
-                    """.trimIndent()
-                }
-
-                "df" -> {
-                    val sb = StringBuilder()
-                    val paths = listOf(
-                        Environment.getDataDirectory().path to "Internal storage",
-                        Environment.getExternalStorageDirectory()?.path to "SD card"
-                    )
-                    for ((p, label) in paths.filter { it.second != null }) {
-                        if (p != null) {
-                            val stat = android.os.StatFs(p)
-                            val total = stat.blockCountLong * stat.blockSizeLong
-                            val free = stat.availableBlocksLong * stat.blockSizeLong
-                            val used = total - free
-                            sb.appendLine("$label:")
-                            sb.appendLine("Total: ${humanReadableBytes(total)}")
-                            sb.appendLine("Used: ${humanReadableBytes(used)}")
-                            sb.appendLine("Free: ${humanReadableBytes(free)}")
-                            sb.appendLine()
-                        }
-                    }
-                    if (sb.isEmpty()) "Error: no storage info" else sb.toString().trim()
-                }
-
-                "tree" -> {
-                    val path = if (args.isEmpty()) "." else args.joinToString(" ")
-                    val (parent, name) = resolvePath(ctx, path, isDir = true) ?: return "Error: invalid path"
-                    val dir = if (name.isEmpty()) parent else parent.findFile(name) ?: return "Error: no such directory"
-                    if (!dir.isDirectory) return "Error: not a directory"
-                    val sb = StringBuilder()
-                    fun printTree(doc: DocumentFile, prefix: String = "") {
-                        sb.appendLine(prefix + (if (prefix.isEmpty()) "." else doc.name))
-                        val files = doc.listFiles().sortedBy { it.name }
-                        val dirs = files.filter { it.isDirectory }
-                        val nonDirs = files.filter { !it.isDirectory }
-                        (dirs + nonDirs).forEachIndexed { i, child ->
-                            val isLast = i == files.size - 1
-                            val newPrefix = prefix + if (isLast) "└── " else "├── "
-                            if (child.isDirectory) {
-                                printTree(child, newPrefix)
-                            } else {
-                                sb.appendLine(newPrefix + child.name)
-                            }
-                        }
-                    }
-                    printTree(dir)
-                    sb.toString().trim()
-                }
-
-                "runactivity" -> {
-                    if (args.size < 2) return "Usage: runactivity <package> <activity> [extras...]"
-                    val pkg = args[0]
-                    val act = args[1]
-                    try {
-                        val pm = ctx.packageManager
-                        val component = ComponentName(pkg, act)
-                        val ai = pm.getActivityInfo(component, 0)
-                        if (!ai.exported) return "Error: activity not exported"
-                        val intent = Intent().apply {
-                            this.component = component
-                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                            // optional extras: assume key=value pairs after
-                            for (i in 2 until args.size step 2) {
-                                val key = args[i]
-                                val value = args.getOrNull(i + 1) ?: continue
-                                putExtra(key, value)
-                            }
-                        }
-                        ctx.startActivity(intent)
-                        "Info: started activity $pkg/$act"
-                    } catch (t: Throwable) {
-                        "Error: cannot start activity: ${t.message}"
-                    }
-                }
-
                 else -> {
                     "Unknown command: $command"
                 }
@@ -2048,13 +1828,6 @@ Voltage: $voltage V
             "Error: ${t.message ?: "execution failed"}"
         }
     }
-
-private fun intent(action: String, msg: String): String {
-    val i = Intent(action)
-    if (ctx !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    ctx.startActivity(i)
-    return "Info: opening $msg"
-}
 
 // Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
 private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
