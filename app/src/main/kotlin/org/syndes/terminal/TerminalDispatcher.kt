@@ -23,11 +23,15 @@ class TerminalDispatcher {
             val t = Terminal()
             addInstanceIfNotDuplicate(t)
         } catch (_: Throwable) {
+        }
+            try {
+        addInstanceIfNotDuplicate(Terminal2())
+    } catch (_: Throwable) {}
             // Если по какой-то причине основного Terminal нет/конструктор бросил — продолжим попытки рефлексией
         }
 
         // Добавляем опциональные реализации через reflection (если они есть)
-        addIfPresent("org.syndes.terminal.Terminal2")
+        addIfPresent("org.syndes.terminal.Terminal5")
         addIfPresent("org.syndes.terminal.Terminal3")
     }
 
