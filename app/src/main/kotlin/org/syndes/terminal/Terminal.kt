@@ -27,6 +27,9 @@ import java.util.zip.ZipOutputStream
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import androidx.core.app.NotificationCompat
+import android.os.BatteryManager
+import android.os.Environment
+import android.content.ComponentName
 
 class Terminal {
 
@@ -1417,7 +1420,7 @@ Hello!   \__/'---'\__/
                     "Info: opening keyboard settings"
                 }
 
-                "advc" -> {
+                "about" -> {
                     val intent = Intent(Settings.ACTION_DEVICE_INFO_SETTINGS)
                     if (ctx !is Activity) intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     ctx.startActivity(intent)
@@ -2011,80 +2014,6 @@ Voltage: $voltage V
                     sb.toString().trim()
                 }
 
-                "tar" -> {
-                    if (args.size < 2) return "Usage: tar <source> <archive.tar> [c for create, x for extract]"
-                    val mode = args.getOrNull(2) ?: "c"
-                    val srcPath = args[0]
-                    val tarPath = args[1]
-                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source"
-                    val src = srcParent.findFile(srcName) ?: return "Error: source not found"
-                    val (tarParent, tarName) = resolvePath(ctx, tarPath, createDirs = true) ?: return "Error: invalid tar path"
-                    return when (mode) {
-                        "c" -> {
-                            val tarFile = tarParent.createFile("application/x-tar", tarName) ?: return "Error: cannot create tar"
-                            try {
-                                ctx.contentResolver.openOutputStream(tarFile.uri)?.use { out ->
-                                    createTar(ctx, src, out)
-                                } ?: return "Error: cannot write tar"
-                                "Info: tar created at $tarPath"
-                            } catch (t: Throwable) {
-                                "Error: tar creation failed: ${t.message}"
-                            }
-                        }
-                        "x" -> {
-                            val destDir = getCurrentDir(ctx) ?: return "Error: no current dir"
-                            try {
-                                ctx.contentResolver.openInputStream(src.uri)?.use { ins ->
-                                    extractTar(ctx, ins, destDir)
-                                } ?: return "Error: cannot read tar"
-                                "Info: extracted tar to ${buildPath(destDir)}"
-                            } catch (t: Throwable) {
-                                "Error: tar extraction failed: ${t.message}"
-                            }
-                        }
-                        else -> "Error: unknown mode, use c for create or x for extract"
-                    }
-                }
-
-                "gzip" -> {
-                    if (args.size < 2) return "Usage: gzip <source> <output.gz> [c for compress, d for decompress]"
-                    val mode = args.getOrNull(2) ?: "c"
-                    val srcPath = args[0]
-                    val outPath = args[1]
-                    val (srcParent, srcName) = resolvePath(ctx, srcPath) ?: return "Error: invalid source"
-                    val src = srcParent.findFile(srcName) ?: return "Error: source not found"
-                    if (src.isDirectory) return "Error: gzip works on files only"
-                    val (outParent, outName) = resolvePath(ctx, outPath, createDirs = true) ?: return "Error: invalid output"
-                    val outFile = outParent.createFile("application/gzip", outName) ?: return "Error: cannot create output"
-                    try {
-                        when (mode) {
-                            "c" -> {
-                                ctx.contentResolver.openInputStream(src.uri)?.use { ins ->
-                                    ctx.contentResolver.openOutputStream(outFile.uri)?.use { outs ->
-                                        GZIPOutputStream(outs).use { gzip ->
-                                            ins.copyTo(gzip)
-                                        }
-                                    }
-                                } ?: return "Error: cannot compress"
-                                "Info: compressed to $outPath"
-                            }
-                            "d" -> {
-                                ctx.contentResolver.openInputStream(src.uri)?.use { ins ->
-                                    GZIPInputStream(ins).use { gzip ->
-                                        ctx.contentResolver.openOutputStream(outFile.uri)?.use { outs ->
-                                            gzip.copyTo(outs)
-                                        }
-                                    }
-                                } ?: return "Error: cannot decompress"
-                                "Info: decompressed to $outPath"
-                            }
-                            else -> return "Error: unknown mode, use c for compress or d for decompress"
-                        }
-                    } catch (t: Throwable) {
-                        "Error: gzip failed: ${t.message}"
-                    }
-                }
-
                 "runactivity" -> {
                     if (args.size < 2) return "Usage: runactivity <package> <activity> [extras...]"
                     val pkg = args[0]
@@ -2111,116 +2040,6 @@ Voltage: $voltage V
                     }
                 }
 
-                "restart" -> {
-                    // Execute sequence: clear; exit; echo 3; echo 5; launch org.syndes.terminal
-                    // But since exit kills, run clear, then launch self, then exit
-                    // Assume launch org.syndes.terminal launches the app again
-                    execute("clear", ctx)
-                    val exitRes = execute("exit", ctx) ?: ""
-                    listOf(launchRes, echo3, echo5, exitRes).filter { it.isNotBlank() }.joinToString("\n")
-                }
-
-                // ===================================================================
-                // ≡≡≡ HELPER-ФУНКЦИИ ДЛЯ НОВЫХ КОМАНД ≡≡≡
-                // ===================================================================
-
-                // Helper for tar creation (simple manual tar without compression)
-                private fun createTar(ctx: Context, src: DocumentFile, out: OutputStream) {
-                    val dos = DataOutputStream(BufferedOutputStream(out))
-                    fun addFile(doc: DocumentFile, path: String) {
-                        val nameBytes = path.toByteArray(Charsets.US_ASCII)
-                        if (nameBytes.size > 99) throw Exception("Path too long for tar")
-                        val size = doc.length()
-                        val modTime = doc.lastModified() / 1000
-                        // Write header
-                        dos.write(nameBytes)
-                        dos.writeBytes("".padEnd(100 - nameBytes.size, ''))
-                        dos.writeBytes("0000777".padEnd(12, '0')) // mode
-                        dos.writeBytes("0000000".padEnd(12, '0')) // uid
-                        dos.writeBytes("0000000".padEnd(12, '0')) // gid
-                        dos.writeBytes(size.toString(8).padStart(11, '0') + "") // size octal
-                        dos.writeBytes(modTime.toString(8).padStart(11, '0') + "") // mtime octal
-                        dos.writeBytes("        ") // checksum placeholder
-                        dos.writeByte(if (doc.isDirectory) '5'.code else '0'.code) // type: 0 file, 5 dir
-                        dos.writeBytes("".padEnd(100, '')) // linkname
-                        dos.writeBytes("ustar  ".padEnd(8)) // magic
-                        dos.writeBytes("".padEnd(32, '')) // uname
-                        dos.writeBytes("".padEnd(32, '')) // gname
-                        dos.writeBytes("0000000".padEnd(8, '0')) // devmajor
-                        dos.writeBytes("0000000".padEnd(8, '0')) // devminor
-                        dos.writeBytes("".padEnd(155, '')) // prefix
-                        dos.writeBytes("".padEnd(12, '')) // pad
-                        // Calculate and write checksum
-                        val header = dos.toByteArray() // Wait, dos is stream, need to buffer header separately
-                        // Note: this is simplified; for proper impl, buffer header, calc checksum, then write.
-                        // For brevity, assume simple files, no long names.
-                        if (!doc.isDirectory) {
-                            ctx.contentResolver.openInputStream(doc.uri)?.use { ins ->
-                                ins.copyTo(dos)
-                            }
-                            // Pad to 512
-                            val pad = (512 - (size % 512)).toInt() % 512
-                            dos.write(ByteArray(pad))
-                        }
-                    }
-                    // Recursive add
-                    fun recurse(doc: DocumentFile, basePath: String) {
-                        val p = basePath + (doc.name ?: "")
-                        addFile(doc, p)
-                        if (doc.isDirectory) {
-                            doc.listFiles().forEach { recurse(it, p + "/") }
-                        }
-                    }
-                    recurse(src, "")
-                    // End tar: two zero blocks
-                    dos.write(ByteArray(1024))
-                    dos.flush()
-                }
-
-                // Note: createTar is basic; checksum calc omitted for brevity - in real, buffer header, sum bytes (unsigned), octal to checksum field.
-
-                // Helper for tar extraction (similar manual)
-                private fun extractTar(ctx: Context, ins: InputStream, dest: DocumentFile) {
-                    val dis = DataInputStream(BufferedInputStream(ins))
-                    while (true) {
-                        val header = ByteArray(512)
-                        dis.readFully(header)
-                        if (header.all { it == 0.toByte() }) break // end
-                        val name = String(header, 0, 100).trim { it <= ' ' || it == '' }
-                        if (name.isEmpty()) continue
-                        val sizeOct = String(header, 124, 11).trim().toLong(8)
-                        val type = header[156].toInt().toChar()
-                        // Create path
-                        val parts = name.split("/").filter { it.isNotEmpty() }
-                        var current = dest
-                        for (i in 0 until parts.size - 1) {
-                            current = current.findFile(parts[i])?.takeIf { it.isDirectory } ?: current.createDirectory(parts[i]) ?: throw Exception("Cannot create dir")
-                        }
-                        if (type == '5') { // dir
-                            current.createDirectory(parts.last()) ?: throw Exception("Cannot create dir")
-                        } else if (type == '0' || type == '') { // file
-                            val file = current.createFile("*/*", parts.last()) ?: throw Exception("Cannot create file")
-                            ctx.contentResolver.openOutputStream(file.uri)?.use { out ->
-                                var remaining = sizeOct
-                                val buf = ByteArray(8192)
-                                while (remaining > 0) {
-                                    val toRead = min(buf.size.toLong(), remaining).toInt()
-                                    val read = dis.read(buf, 0, toRead)
-                                    if (read <= 0) break
-                                    out.write(buf, 0, read)
-                                    remaining -= read
-                                }
-                                // Skip pad
-                                val pad = (512 - (sizeOct % 512) % 512).toInt()
-                                dis.skip(pad.toLong())
-                            }
-                        } else {
-                            // Skip unknown
-                            dis.skip(((sizeOct + 511) / 512 * 512))
-                        }
-                    }
-                }
-
                 else -> {
                     "Unknown command: $command"
                 }
@@ -2229,6 +2048,13 @@ Voltage: $voltage V
             "Error: ${t.message ?: "execution failed"}"
         }
     }
+
+private fun intent(action: String, msg: String): String {
+    val i = Intent(action)
+    if (ctx !is Activity) i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    ctx.startActivity(i)
+    return "Info: opening $msg"
+}
 
 // Replace in a single file. Returns true if replaced (found old substring and successfully wrote).
 private fun replaceInFile(ctx: Context, doc: DocumentFile, old: String, new: String): Boolean {
