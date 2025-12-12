@@ -1227,8 +1227,9 @@ private fun runCommand(command: String, ctx: Context): String {
                 terminalOutput.text = ""
             }
             val maybe = try {
-                withContext(Dispatchers.Main) { terminal.execute(command, this@SyPLComActivity) }
-            } catch (_: Throwable) {
+    withContext(Dispatchers.Main) { runCommand(command, this@SyPLComActivity) }
+}
+     catch (_: Throwable) {
                 null
             }
             if (maybe != null && !maybe.startsWith("Info: Screen cleared.", ignoreCase = true)) {
@@ -1335,8 +1336,8 @@ private fun runCommand(command: String, ctx: Context): String {
             val result = try {
                 withContext(Dispatchers.IO) {
                     try {
-                        terminal.execute(command, this@SyPLComActivity)
-                    } catch (t: Throwable) {
+    runCommand(command, this@SyPLComActivity)
+} catch (t: Throwable) {
                         "Error: ${t.message ?: "execution failed"}"
                     }
                 }
@@ -1351,9 +1352,9 @@ private fun runCommand(command: String, ctx: Context): String {
             return result
         } else {
             val result = try {
-                withContext(Dispatchers.Main) {
-                    terminal.execute(command, this@SyPLComActivity)
-                }
+    withContext(Dispatchers.Main) {
+        runCommand(command, this@SyPLComActivity)
+    }
             } catch (t: Throwable) {
                 "Error: command execution failed"
             }
