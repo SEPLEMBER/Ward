@@ -57,7 +57,7 @@ class SyPLComActivity : AppCompatActivity() {
 
     private var progressJob: Job? = null
 
-    private val terminal = Terminal()
+    private val terminal = TerminalDispatcher()
 
     private val PREFS_NAME = "terminal_prefs"
 
