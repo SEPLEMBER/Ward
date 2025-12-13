@@ -199,7 +199,7 @@ class MainActivity : AppCompatActivity() {
         // handle incoming intent (may be shortcut)
         handleIncomingIntent(intent)
 
-        // boot shell: если есть автозагрузочная команда — показать окно и автоматически ввести/запустить её
+        // boot shell: если есть автозагрузочная команда — выполнить её при старте (но НЕ показывать окно)
         checkBootShellOnStart()
     }
 
@@ -1416,10 +1416,16 @@ class MainActivity : AppCompatActivity() {
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val saved = prefs.getString(PREF_KEY_BOOT_SHELL, "") ?: ""
             if (saved.isNotBlank()) {
-                // Show overlay so user can clear/edit autoload list,
-                // and also inject the commands to run automatically.
+                // НЕ показываем overlay при старте, но выполняем сохранённые команды
                 runOnUiThread {
-                    showBootShellOverlay(initialText = saved, autoRun = true)
+                    appendToTerminal(colorize("\n[bootshell] auto-running saved commands\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                    inputField.setText(saved)
+                    inputField.setSelection(inputField.text.length)
+                    // slight delay to allow UI to settle, затем запуск
+                    lifecycleScope.launch {
+                        delay(120)
+                        sendCommand()
+                    }
                 }
             }
         } catch (_: Throwable) {
