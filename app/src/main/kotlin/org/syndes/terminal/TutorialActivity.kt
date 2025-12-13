@@ -118,31 +118,46 @@ Available commands:
   wc <file>            - word count: lines, words, chars
 
 ==E: Settings, Shortcuts & Apps shortcuts==
-  acc                  - open account settings
-  alarm                - open alarm app
-  apm                  - open airplane mode settings
-  btss                 - open battery saver settings
-  bts                  - open Bluetooth settings
-  cam                  - open camera app
-  clk                  - open date/time settings
-  contacts             - open contacts app
-  data                 - open mobile data settings
-  dev                  - open developer settings
-  dsp                  - open display settings
-  loc                  - open location settings
-  nfc                  - open NFC settings
-  notif                - open notification settings
-  sec                  - open security/app details
-  snd                  - open sound settings
-  stg                  - open storage settings
-  vpns                 - open VPN settings
-  wifi                 - open Wi-Fi settings
-  browser [url]        - open browser with optional URL
-  call <number>        - open dialer with number
-  email [addr] [subj] [body] - open email composer
-  notify -t <title> -m <message> - send system notification
-  search <query>       - perform web search (opens browser)
-  sms [number] [text]  - open SMS app with optional number/text
+act                  - launch an Activity of the specified app (if exported=true)
+shortc               - create a home screen shortcut that runs a terminal command
+bootshell            - open BootShell (UI for autostart / boot command management)
+kbd                  - open keyboard settings
+aband                - open About phone / device information
+accs                 - open accessibility settings
+priv                 - open privacy settings
+lang                 - open language settings
+home                 - open home screen / launcher settings
+zen                  - open Do Not Disturb settings
+night                - open night light / blue light filter settings
+apse <app|pkg>       - open settings for the specified application (app details)
+wifi                 - open Wi-Fi settings
+bts                  - open Bluetooth settings
+data                 - open mobile data settings
+apm                  - open airplane mode settings
+snd                  - open sound settings
+dsp                  - open display / screen settings
+apps                 - open the general application settings screen
+stg                  - open storage / internal memory settings
+sec                  - open security / application details
+loc                  - open location (GPS) settings
+nfc                  - open NFC settings
+cam                  - open the camera (ACTION_IMAGE_CAPTURE)
+clk                  - open date & time settings
+notif                - open application notification settings
+acc                  - open accounts / sync settings
+dev                  - open developer options
+alarm                - open the alarm clock application
+btss                 - open battery saving / power management settings
+contacts             - open the contacts application
+vpns                 - open VPN settings
+browser [url]        - open the browser (optional URL)
+call <number>        - open the dialer with the specified phone number
+email [addr] [subj] [body]
+                     - open the email composer (address/subject/body optional)
+notify -t <title> -m <message>
+                     - send a system notification
+search <query>       - perform an internet search (opens the browser)
+sms [number] [text]  - open the SMS app with optional number and text
 
 ==F: Shell control, aliases & app flow==
   clear                - clear terminal output (internal)
