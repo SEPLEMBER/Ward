@@ -1,12 +1,16 @@
 package org.syndes.terminal
 
+import android.app.PendingIntent
 import android.content.BroadcastReceiver
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ShortcutInfo
+import android.content.pm.ShortcutManager
 import android.graphics.Color
+import android.graphics.drawable.Icon
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -109,6 +113,12 @@ class MainActivity : AppCompatActivity() {
     // Programmatically created stop-queue button
     private var stopQueueButton: Button? = null
 
+    // Keys for extras/prefs
+    private val EXTRA_SHORTCUT_CMD = "shortcut_cmd"
+    private val EXTRA_SHORTCUT_LABEL = "shortcut_label"
+    private val ACTION_RUN_SHORTCUT = "org.syndes.terminal.RUN_SHORTCUT"
+    private val PREF_KEY_BOOT_SHELL = "bootshell_cmds"
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -184,6 +194,50 @@ class MainActivity : AppCompatActivity() {
         // По умолчанию даём фокус полю и пытаемся показать клавиатуру (параметр устройства/IME может мешать)
         inputField.post {
             inputField.requestFocus()
+        }
+
+        // handle incoming intent (may be shortcut)
+        handleIncomingIntent(intent)
+
+        // boot shell: если есть автозагрузочная команда — показать окно и автоматически ввести/запустить её
+        checkBootShellOnStart()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        // handle when app started via pinned shortcut (or other intents)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        try {
+            if (intent == null) return
+            // support both explicit action and extra-based invocation
+            val cmdFromExtra = intent.getStringExtra(EXTRA_SHORTCUT_CMD)
+            if (!cmdFromExtra.isNullOrBlank()) {
+                // inject and run
+                runOnUiThread {
+                    appendToTerminal(colorize("\n[shortcut] running: $cmdFromExtra\n", ContextCompat.getColor(this, R.color.color_info)), ContextCompat.getColor(this, R.color.color_info))
+                    inputField.setText(cmdFromExtra)
+                    inputField.setSelection(inputField.text.length)
+                    sendCommand()
+                }
+                return
+            }
+
+            if (intent.action == ACTION_RUN_SHORTCUT) {
+                val cmd = intent.getStringExtra(EXTRA_SHORTCUT_CMD)
+                if (!cmd.isNullOrBlank()) {
+                    runOnUiThread {
+                        appendToTerminal(colorize("\n[shortcut] running: $cmd\n", ContextCompat.getColor(this, R.color.color_info)), ContextCompat.getColor(this, R.color.color_info))
+                        inputField.setText(cmd)
+                        inputField.setSelection(inputField.text.length)
+                        sendCommand()
+                    }
+                }
+            }
+        } catch (_: Throwable) {
+            // ignore
         }
     }
 
@@ -421,6 +475,151 @@ class MainActivity : AppCompatActivity() {
         val errorColor = ContextCompat.getColor(this, R.color.color_error)
         val systemYellow = Color.parseColor("#FFD54F")
 
+        // ==== NEW: act command (launch activity of any exported app) ====
+        if (inputToken == "act") {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 2) {
+                withContext(Dispatchers.Main) {
+                    appendToTerminal(colorize("Usage: act <package> [<activity>]\nExamples:\n  act com.example.app\n  act com.example.app com.example.app.MainActivity\n  act com.example.app/.MainActivity\n", errorColor), errorColor)
+                }
+                return "Error: act usage"
+            }
+            val pkg = parts[1].trim()
+            val activityPart = if (parts.size >= 3) parts.drop(2).joinToString(" ").trim() else null
+
+            try {
+                val launchIntent: Intent? = when {
+                    activityPart.isNullOrBlank() -> {
+                        // try getLaunchIntentForPackage
+                        packageManager.getLaunchIntentForPackage(pkg)
+                    }
+                    else -> {
+                        // allow formats: .Activity, com.pkg.Activity, pkg/.Activity
+                        var actName = activityPart
+                        if (actName.startsWith("/")) actName = actName.removePrefix("/")
+                        // If activityPart starts with '.' -> make full name
+                        if (actName.startsWith(".")) {
+                            actName = "$pkg$actName"
+                        } else if (actName.contains("/")) {
+                            // handle com.pkg/.Some -> normalize
+                            actName = actName.substringAfter('/')
+                            if (actName.startsWith(".")) actName = "$pkg$actName"
+                        }
+                        Intent().apply {
+                            setClassName(pkg, actName)
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                    }
+                }
+
+                if (launchIntent == null) {
+                    withContext(Dispatchers.Main) {
+                        appendToTerminal(colorize("Error: cannot resolve activity for package '$pkg'\n", errorColor), errorColor)
+                    }
+                    return "Error: cannot resolve activity"
+                }
+
+                // Try to start activity; catch SecurityException if not exported or protected
+                try {
+                    withContext(Dispatchers.Main) {
+                        startActivity(launchIntent)
+                        appendToTerminal(colorize("Launched activity for package $pkg\n", infoColor), infoColor)
+                    }
+                    return "Info: activity launched"
+                } catch (se: SecurityException) {
+                    withContext(Dispatchers.Main) {
+                        appendToTerminal(colorize("Error: SecurityException when launching activity (not exported or requires permission)\n", errorColor), errorColor)
+                    }
+                    return "Error: security"
+                } catch (t: Throwable) {
+                    withContext(Dispatchers.Main) {
+                        appendToTerminal(colorize("Error: failed to launch activity: ${t.message}\n", errorColor), errorColor)
+                    }
+                    return "Error: launch failed"
+                }
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    appendToTerminal(colorize("Error: act failed: ${t.message}\n", errorColor), errorColor)
+                }
+                return "Error: act"
+            }
+        }
+
+        // ==== NEW: shortc command (create a shortcut that runs a terminal command) ====
+        if (inputToken == "shortc") {
+            val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
+            if (parts.size < 3) {
+                withContext(Dispatchers.Main) {
+                    appendToTerminal(colorize("Usage: shortc <label> <command...>\nExample: shortc Reboot reboot && sleep 2s\n", errorColor), errorColor)
+                }
+                return "Error: shortc usage"
+            }
+            val label = parts[1]
+            val cmd = parts.drop(2).joinToString(" ")
+
+            try {
+                val target = Intent(this, MainActivity::class.java).apply {
+                    action = ACTION_RUN_SHORTCUT
+                    putExtra(EXTRA_SHORTCUT_CMD, cmd)
+                    addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val sm = getSystemService(ShortcutManager::class.java)
+                    if (sm != null) {
+                        val id = "syd_shortcut_${System.currentTimeMillis()}"
+                        val info = ShortcutInfo.Builder(this, id)
+                            .setShortLabel(label)
+                            .setIntent(target)
+                            .build()
+                        // prepare pending intent for confirmation callback (optional)
+                        val piFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                        } else {
+                            PendingIntent.FLAG_UPDATE_CURRENT
+                        }
+                        val confirmationIntent = PendingIntent.getBroadcast(this, 0, Intent(), piFlags)
+                        val success = sm.requestPinShortcut(info, confirmationIntent.intentSender)
+                        withContext(Dispatchers.Main) {
+                            appendToTerminal(colorize("Shortcut requested: $label (command saved). If launcher supports pinning, confirm to add.\n", infoColor), infoColor)
+                        }
+                        return "Info: shortcut requested"
+                    }
+                }
+
+                // Fallback for older devices / launchers: broadcast INSTALL_SHORTCUT (deprecated but works on some)
+                val install = Intent("com.android.launcher.action.INSTALL_SHORTCUT").apply {
+                    putExtra(Intent.EXTRA_SHORTCUT_INTENT, target)
+                    putExtra(Intent.EXTRA_SHORTCUT_NAME, label)
+                    // no duplicate
+                    putExtra("duplicate", false)
+                    // icon: use app icon as fallback
+                    try {
+                        val appIcon = packageManager.getApplicationIcon(packageName)
+                        // NOTE: putExtra(EXTRA_SHORTCUT_ICON) expects Parcelable Bitmap; skip complex conversion to keep simple
+                    } catch (_: Throwable) { /* ignore */ }
+                }
+                sendBroadcast(install)
+                withContext(Dispatchers.Main) {
+                    appendToTerminal(colorize("Broadcasted shortcut install (legacy). If launcher supports it, shortcut added.\n", infoColor), infoColor)
+                }
+                return "Info: shortcut broadcasted"
+            } catch (t: Throwable) {
+                withContext(Dispatchers.Main) {
+                    appendToTerminal(colorize("Error: cannot create shortcut: ${t.message}\n", errorColor), errorColor)
+                }
+                return "Error: shortc failed"
+            }
+        }
+
+        // ==== NEW: bootshell command - show UI for autoload commands ====
+        if (inputToken == "bootshell") {
+            withContext(Dispatchers.Main) {
+                showBootShellOverlay()
+            }
+            return "Info: bootshell opened"
+        }
+
         // ==== NEW: sleep command ====
         if (inputToken == "sleep") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -510,7 +709,7 @@ class MainActivity : AppCompatActivity() {
                     withContext(Dispatchers.Main) {
                         appendToTerminal(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor), errorColor)
                     }
-                    return "Error: script not found"
+                    return "Error: scripts not found"
                 }
 
                 // Read file text
@@ -1209,4 +1408,172 @@ class MainActivity : AppCompatActivity() {
 
         data class Parallel(val commands: List<String>) : CommandItem()
     }
+
+    // ------------------- Boot shell overlay & helpers -------------------
+
+    private fun checkBootShellOnStart() {
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val saved = prefs.getString(PREF_KEY_BOOT_SHELL, "") ?: ""
+            if (saved.isNotBlank()) {
+                // Show overlay so user can clear/edit autoload list,
+                // and also inject the commands to run automatically.
+                runOnUiThread {
+                    showBootShellOverlay(initialText = saved, autoRun = true)
+                }
+            }
+        } catch (_: Throwable) {
+            // ignore
+        }
+    }
+
+    /**
+     * Show a simple dark overlay with an EditText for boot/autoload commands.
+     * initialText - prefill the EditText
+     * autoRun - if true, immediately inject initialText into inputField and call sendCommand()
+     */
+    private fun showBootShellOverlay(initialText: String = "", autoRun: Boolean = false) {
+        try {
+            val root = findViewById<ViewGroup>(android.R.id.content)
+            // Prevent multiple overlays
+            val existing = root.findViewWithTag<View>("bootshell_overlay")
+            if (existing != null) {
+                // bring to front
+                existing.bringToFront()
+                return
+            }
+
+            val overlay = FrameLayout(this).apply {
+                tag = "bootshell_overlay"
+                setBackgroundColor(Color.parseColor("#CC000000")) // semi-transparent dark
+                isClickable = true
+            }
+
+            val container = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                val pad = (14 * resources.displayMetrics.density).toInt()
+                setPadding(pad, pad, pad, pad)
+                val lp = FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.MATCH_PARENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER
+                ).apply {
+                    marginStart = (20 * resources.displayMetrics.density).toInt()
+                    marginEnd = (20 * resources.displayMetrics.density).toInt()
+                }
+                layoutParams = lp
+                setBackgroundColor(Color.parseColor("#101010"))
+            }
+
+            val tv = TextView(this).apply {
+                text = "BootShell — автозагрузка команд\n(вставьте команды; сохраните чтобы включить, очистите чтобы отключить)"
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                val padv = (8 * resources.displayMetrics.density).toInt()
+                setPadding(padv, padv, padv, padv)
+            }
+            container.addView(tv)
+
+            val et = EditText(this).apply {
+                isSingleLine = false
+                minLines = 3
+                maxLines = 10
+                setText(initialText)
+                setTextColor(ContextCompat.getColor(this@MainActivity, R.color.terminal_text))
+                setBackgroundColor(Color.TRANSPARENT)
+                val p = (6 * resources.displayMetrics.density).toInt()
+                setPadding(p, p, p, p)
+            }
+            container.addView(et, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                topMargin = (8 * resources.displayMetrics.density).toInt()
+            })
+
+            // Buttons row: Save | Run Now | Clear | Close
+            val btnRow = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.END
+            }
+
+            val saveBtn = Button(this).apply {
+                text = "Save"
+                isAllCaps = false
+                setOnClickListener {
+                    val txt = et.text.toString()
+                    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    prefs.edit().putString(PREF_KEY_BOOT_SHELL, txt).apply()
+                    appendToTerminal(colorize("\n[bootshell] saved autoload commands\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                }
+            }
+            val runNowBtn = Button(this).apply {
+                text = "Run Now"
+                isAllCaps = false
+                setOnClickListener {
+                    val txt = et.text.toString()
+                    if (txt.isNotBlank()) {
+                        inputField.setText(txt)
+                        inputField.setSelection(inputField.text.length)
+                        appendToTerminal(colorize("\n[bootshell] running autoload commands\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                        sendCommand()
+                    } else {
+                        appendToTerminal(colorize("\n[bootshell] nothing to run\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                    }
+                }
+            }
+            val clearBtn = Button(this).apply {
+                text = "Clear"
+                isAllCaps = false
+                setOnClickListener {
+                    et.setText("")
+                    val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    prefs.edit().putString(PREF_KEY_BOOT_SHELL, "").apply()
+                    appendToTerminal(colorize("\n[bootshell] autoload cleared\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                }
+            }
+            val closeBtn = Button(this).apply {
+                text = "Close"
+                isAllCaps = false
+                setOnClickListener {
+                    try { root.removeView(overlay) } catch (_: Throwable) {}
+                }
+            }
+
+            // style small spacing
+            val paramsBtn = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = (6 * resources.displayMetrics.density).toInt()
+            }
+            btnRow.addView(saveBtn, paramsBtn)
+            btnRow.addView(runNowBtn, paramsBtn)
+            btnRow.addView(clearBtn, paramsBtn)
+            btnRow.addView(closeBtn, paramsBtn)
+
+            container.addView(btnRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = (10 * resources.displayMetrics.density).toInt()
+            })
+
+            overlay.addView(container)
+            root.addView(overlay, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            ))
+
+            // if autoRun requested and initialText present -> inject & run
+            if (autoRun && initialText.isNotBlank()) {
+                inputField.setText(initialText)
+                inputField.setSelection(inputField.text.length)
+                appendToTerminal(colorize("\n[bootshell] auto-running saved commands\n", ContextCompat.getColor(this@MainActivity, R.color.color_info)), ContextCompat.getColor(this@MainActivity, R.color.color_info))
+                // slight delay to allow UI to settle
+                lifecycleScope.launch {
+                    delay(120)
+                    sendCommand()
+                }
+            }
+        } catch (t: Throwable) {
+            appendToTerminal(colorize("Error: cannot show bootshell UI: ${t.message}\n", ContextCompat.getColor(this, R.color.color_error)), ContextCompat.getColor(this, R.color.color_error))
+        }
+    }
+
+    // --------------------------------------------------------------------
+
 }
