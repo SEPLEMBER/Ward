@@ -182,7 +182,7 @@ class MainActivity : AppCompatActivity() {
         handleIncomingIntent(intent)
     }
 
-        private fun handleIncomingIntent(intent: Intent?) {
+    private fun handleIncomingIntent(intent: Intent?) {
         try {
             if (intent == null) return
             // support both explicit action and extra-based invocation
@@ -212,6 +212,7 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) {
             // ignore
         }
+    }
 
     override fun onResume() {
         super.onResume()
@@ -1501,5 +1502,4 @@ class MainActivity : AppCompatActivity() {
             appendToTerminal(colorize("Error: cannot show bootshell UI: ${t.message}\n", ContextCompat.getColor(this, R.color.color_error)), ContextCompat.getColor(this, R.color.color_error))
         }
     }
-}
 }
