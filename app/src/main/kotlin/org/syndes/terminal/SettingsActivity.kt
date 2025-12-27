@@ -6,6 +6,7 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.provider.DocumentsContract
+import android.view.WindowManager
 import android.widget.*
 import androidx.activity.result.ActivityResultLauncher
 import androidx.activity.result.contract.ActivityResultContracts
@@ -20,7 +21,7 @@ import androidx.documentfile.provider.DocumentFile
  *  - создаёт внутри work-папки базовые папки: "scripts" и "logs" (если отсутствуют)
  *  - сохраняет work_dir_uri и current_dir_uri в SharedPreferences("terminal_prefs")
  *
- * Замечание: по принципу приватности/безопасности приложение не пишет логов и не отправляет аналитику.
+ * Добавлена опция "secure screenshots" — ставит/убирает FLAG_SECURE у окна приложения.
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -30,6 +31,7 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var aliasesField: EditText
     private lateinit var saveButton: Button
     private lateinit var resetButton: Button
+    private lateinit var secureScreenshotsSwitch: SwitchCompat
 
     private val PREFS_NAME = "terminal_prefs"
     private lateinit var folderPickerLauncher: ActivityResultLauncher<Intent>
@@ -44,6 +46,7 @@ class SettingsActivity : AppCompatActivity() {
         aliasesField = findViewById(R.id.aliasesField)
         saveButton = findViewById(R.id.saveButton)
         resetButton = findViewById(R.id.resetButton)
+        secureScreenshotsSwitch = findViewById(R.id.secureScreenshotsSwitch)
 
         // Launcher для выбора директории (SAF)
         folderPickerLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -59,9 +62,7 @@ class SettingsActivity : AppCompatActivity() {
 
         // Обработчики кнопок
         chooseFolderBtn.setOnClickListener {
-            // Сбрасываем преднамеренно флагы: ACTION_OPEN_DOCUMENT_TREE
             val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
-                // попросим persistable permission
                 addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
@@ -79,31 +80,44 @@ class SettingsActivity : AppCompatActivity() {
             resetValues()
         }
 
+        // Слушатель переключателя защиты от скриншотов — применяем и сохраняем сразу
+        secureScreenshotsSwitch.setOnCheckedChangeListener { _, isChecked ->
+            applySecureFlag(isChecked)
+            // сохраняем сразу, чтобы изменение действовало глобально даже если пользователь не нажмёт Save
+            getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+                .putBoolean("secure_screenshots", isChecked)
+                .apply()
+        }
+
         // Загрузить текущие значения (и проверить права на work dir)
         loadValues()
+    }
+
+    // Применить/убрать FLAG_SECURE для текущего окна
+    private fun applySecureFlag(enabled: Boolean) {
+        if (enabled) {
+            window.setFlags(WindowManager.LayoutParams.FLAG_SECURE, WindowManager.LayoutParams.FLAG_SECURE)
+        } else {
+            window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        }
     }
 
     // Обработка выбора папки — присваиваем persistable permission, сохраняем prefs, создаём поддиры
     private fun handlePickedTreeUri(treeUri: Uri) {
         try {
-            // take persistable permission (read + write)
             val takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
             contentResolver.takePersistableUriPermission(treeUri, takeFlags)
 
-            // Сохраняем URI в prefs
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
             prefs.putString("work_dir_uri", treeUri.toString())
             prefs.putString("current_dir_uri", treeUri.toString())
             prefs.apply()
 
-            // Попробуем создать стандартные подпапки scripts/ и logs/
             ensureWorkSubfolders(treeUri)
 
-            // Обновляем UI
             workFolderUriView.text = buildFriendlyName(treeUri) ?: treeUri.toString()
             Toast.makeText(this, "Work folder set", Toast.LENGTH_SHORT).show()
         } catch (t: Throwable) {
-            // не логируем — просто показываем юзеру
             Toast.makeText(this, "Failed to set work folder", Toast.LENGTH_SHORT).show()
         }
     }
@@ -117,26 +131,27 @@ class SettingsActivity : AppCompatActivity() {
             if (uri != null && hasPersistedPermission(uri)) {
                 workFolderUriView.text = buildFriendlyName(uri) ?: uri.toString()
             } else {
-                // permission lost or bad URI
                 workFolderUriView.text = "(not set)"
             }
         } else {
             workFolderUriView.text = "(not set)"
         }
 
-        // Theme removed — не устанавливаем/не читаем параметры темы
-
         autoScrollSwitch.isChecked = prefs.getBoolean("scroll_behavior", true)
         aliasesField.setText(prefs.getString("aliases", ""))
+
+        // Загружаем состояние защиты от скриншотов и применяем флаг окна
+        val secure = prefs.getBoolean("secure_screenshots", false)
+        secureScreenshotsSwitch.isChecked = secure
+        applySecureFlag(secure)
     }
 
-    // Save other prefs (scroll, aliases)
+    // Save other prefs (scroll, aliases, secure_screenshots)
     private fun saveValues() {
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-
-        // Theme removed — не сохраняем параметр темы
         prefs.putBoolean("scroll_behavior", autoScrollSwitch.isChecked)
         prefs.putString("aliases", aliasesField.text.toString().trim())
+        prefs.putBoolean("secure_screenshots", secureScreenshotsSwitch.isChecked)
         prefs.apply()
     }
 
@@ -146,9 +161,11 @@ class SettingsActivity : AppCompatActivity() {
         prefs.remove("work_dir_uri")
         prefs.remove("current_dir_uri")
         prefs.remove("aliases")
-        // prefs.remove("theme")  // удалено: тема больше не используется
         prefs.remove("scroll_behavior")
+        prefs.remove("secure_screenshots")
         prefs.apply()
+        // Убираем флаг у текущего окна тоже
+        applySecureFlag(false)
         loadValues()
         Toast.makeText(this, "Settings reset", Toast.LENGTH_SHORT).show()
     }
@@ -163,17 +180,13 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     // Пытаемся создать внутри выбранной work папки подпапки scripts и logs (если не существуют).
-    // Это обеспечивает "изолированное" окружение: пользователь хранит все скрипты в workDir/scripts.
     private fun ensureWorkSubfolders(treeUri: Uri) {
         try {
             val tree = DocumentFile.fromTreeUri(this, treeUri) ?: return
-            // create "scripts" and "logs" if missing
             val scripts = tree.findFile("scripts") ?: tree.createDirectory("scripts")
             val logs = tree.findFile("logs") ?: tree.createDirectory("logs")
-            // также можно создать скрытую папку для внутренних метаданных
             val meta = tree.findFile(".syd_meta") ?: tree.createDirectory(".syd_meta")
             val trash = tree.findFile(".syndes_trash") ?: tree.createDirectory(".syndes_trash")
-            // no further action; creation is best-effort
         } catch (t: Throwable) {
             // молча игнорируем ошибки создания — не критично
         }
