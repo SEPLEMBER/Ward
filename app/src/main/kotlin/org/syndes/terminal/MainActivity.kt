@@ -51,32 +51,25 @@ import java.util.ArrayDeque
 import kotlin.coroutines.coroutineContext
 
 class MainActivity : AppCompatActivity() {
-
     private lateinit var terminalOutput: TextView
     private lateinit var inputField: EditText
     private lateinit var sendButton: Button
     private lateinit var progressRow: LinearLayout
     private lateinit var progressText: TextView
     private lateinit var progressBar: ProgressBar
-
     private var progressJob: Job? = null
-
     private val terminal = Terminal()
-
     private val PREFS_NAME = "terminal_prefs"
-
     // For controlling glow specifically on the terminal output
     private var terminalGlowEnabled = true
     private var terminalGlowColor = Color.parseColor("#00FFF7")
     private var terminalGlowRadius = 6f
-
     // список "тяжёлых" команд, которые нужно выполнять в IO
     private val heavyCommands = setOf(
         "rm", "cp", "mv", "replace", "encrypt", "decrypt", "cmp", "diff",
         "rename", "backup", "snapshot", "trash", "cleartrash",
         "sha256", "grep", "batchrename", "md5", "delete all y"
     )
-
     // receiver to show watchdog results when service finishes
     private val watchdogReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -91,28 +84,22 @@ class MainActivity : AppCompatActivity() {
             }
         }
     }
-
     // очередь команд для пакетного выполнения — теперь хранит либо одиночную команду, либо параллельную группу
     private val commandQueue = ArrayDeque<CommandItem>()
     private var processingJob: Job? = null
     private var processingQueue = false
-
     // background jobs (для команд с & и т.п.)
     private val backgroundJobs = mutableListOf<Job>()
-
     // CompletableDeferred used to wait for intent-based actions (uninstall)
     private var pendingIntentCompletion: CompletableDeferred<Unit>? = null
-
     // Launcher for intents that require user interaction and return control
     private val intentLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         // when system dialog/activity finishes - resume queue processing (if waiting)
         pendingIntentCompletion?.complete(Unit)
         pendingIntentCompletion = null
     }
-
     // Programmatically created stop-queue button
     private var stopQueueButton: Button? = null
-
     // Keys for extras/prefs
     private val EXTRA_SHORTCUT_CMD = "shortcut_cmd"
     private val EXTRA_SHORTCUT_LABEL = "shortcut_label"
@@ -122,59 +109,49 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        // <--- secure screenshots: применяем флаг при старте активности
+        applySecureFlagFromPrefs()
+
         // используем ADJUST_RESIZE — при появлении клавиатуры layout будет уменьшаться,
         // это предотвращает «уход» верхней части TextView за пределы экрана
         window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
-
         setContentView(R.layout.activity_main)
-
         terminalOutput = findViewById(R.id.terminalOutput)
         inputField = findViewById(R.id.inputField)
         sendButton = findViewById(R.id.sendButton)
         progressRow = findViewById(R.id.progressRow)
         progressText = findViewById(R.id.progressText)
         progressBar = findViewById(R.id.progressBar)
-
         // Включаем прокрутку
         terminalOutput.movementMethod = ScrollingMovementMethod()
-
         // Вступительное сообщение (подсветка info)
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
         appendToTerminal(colorize("Welcome to Syndes Terminal!\nType 'help' to see commands.\n\n", infoColor), infoColor)
-
         // Переопределяем кнопку: текстовый вид, жёлтый цвет (вшитый)
         sendButton.text = "RUN"
-        val embeddedYellow = Color.parseColor("#FFD54F")
+        val embeddedYellow = Color.parseColor("#03A9F4")
         sendButton.setTextColor(embeddedYellow)
         sendButton.setBackgroundColor(Color.TRANSPARENT)
-
         // --- Apply subtle neon/glow effects (safe presets) ---
         // terminal output: cyan-ish glow (subtle) - save values for later toggling
         terminalGlowColor = Color.parseColor("#00FFF7")
         terminalGlowRadius = 6f
         terminalGlowEnabled = true
         applyNeon(terminalOutput, terminalGlowColor, radius = terminalGlowRadius)
-
         // progress text: warm yellow glow
         applyNeon(progressText, embeddedYellow, radius = 5f)
-
         // send button: keep its yellow text and add small glow
         applyNeon(sendButton, embeddedYellow, radius = 6f)
-
         // input field: small subtle greenish glow so caret/text pop
         val subtleGreen = Color.parseColor("#39FF14")
         applyNeon(inputField, subtleGreen, radius = 3f)
-
         // Добавляем кнопку "STOP QUEUE" программно (без изменения XML)
         addStopQueueButton()
-
         // Сделаем inputField явно фокусируемым в touch-mode (предотвращает потерю ввода)
         inputField.isFocusable = true
         inputField.isFocusableInTouchMode = true
-
         // Обработчики
         sendButton.setOnClickListener { sendCommand() }
-
         inputField.setOnEditorActionListener { _, actionId, event ->
             if (actionId == EditorInfo.IME_ACTION_DONE ||
                 (event != null && event.keyCode == KeyEvent.KEYCODE_ENTER && event.action == KeyEvent.ACTION_DOWN)
@@ -185,20 +162,16 @@ class MainActivity : AppCompatActivity() {
                 false
             }
         }
-
         // Если пользователь тапает по выводу — переводим фокус на поле ввода и показываем клавиатуру
         terminalOutput.setOnClickListener {
             focusAndShowKeyboard()
         }
-
         // По умолчанию даём фокус полю и пытаемся показать клавиатуру (параметр устройства/IME может мешать)
         inputField.post {
             inputField.requestFocus()
         }
-
         // handle incoming intent (may be shortcut)
         handleIncomingIntent(intent)
-
         // boot shell: если есть автозагрузочная команда — выполнить её при старте (но НЕ показывать окно)
         checkBootShellOnStart()
     }
@@ -209,7 +182,7 @@ class MainActivity : AppCompatActivity() {
         handleIncomingIntent(intent)
     }
 
-    private fun handleIncomingIntent(intent: Intent?) {
+        private fun handleIncomingIntent(intent: Intent?) {
         try {
             if (intent == null) return
             // support both explicit action and extra-based invocation
@@ -239,10 +212,13 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) {
             // ignore
         }
-    }
 
     override fun onResume() {
         super.onResume()
+
+        // <--- secure screenshots: перепроверяем при возобновлении (например, вернулись из настроек)
+        applySecureFlagFromPrefs()
+
         // register receiver for watchdog results (service broadcasts)
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -292,12 +268,9 @@ class MainActivity : AppCompatActivity() {
             focusAndShowKeyboard()
             return
         }
-
         val inputColor = ContextCompat.getColor(this, R.color.color_command)
-
         // Парсим ввод в список CommandItem
         val items = parseInputToCommandItems(rawInput)
-
         // Добавляем элементы в очеред и печатаем в терминал
         for (item in items) {
             when (item) {
@@ -311,11 +284,9 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }
-
         // Очищаем поле ввода
         inputField.text.clear()
         focusAndShowKeyboard()
-
         // Если сейчас не исполняется очередь — стартуем процесс
         if (!processingQueue) processCommandQueue()
     }
@@ -333,9 +304,7 @@ class MainActivity : AppCompatActivity() {
             }
             // add neon glow to the created button (safe preset)
             applyNeon(btn, Color.parseColor("#FF5F1F"), radius = 6f)
-
             stopQueueButton = btn
-
             // Try to add before sendButton so STOP is left, RUN is right
             val parent = sendButton.parent
             if (parent is ViewGroup) {
@@ -369,22 +338,18 @@ class MainActivity : AppCompatActivity() {
     private fun stopQueue() {
         // clear the queue
         commandQueue.clear()
-
         // cancel processing job
         processingJob?.cancel(CancellationException("stopped by user"))
         processingJob = null
         processingQueue = false
-
         // cancel pending intent wait (if waiting for uninstall)
         try {
             pendingIntentCompletion?.completeExceptionally(CancellationException("stopped by user"))
         } catch (_: Throwable) { /* ignore */ }
         pendingIntentCompletion = null
-
         // cancel background jobs
         backgroundJobs.forEach { it.cancel(CancellationException("stopped by user")) }
         backgroundJobs.clear()
-
         // UI feedback
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
         appendToTerminal(colorize("\n[STOP] queue stopped and cleared\n", infoColor), infoColor)
@@ -398,7 +363,6 @@ class MainActivity : AppCompatActivity() {
         processingQueue = true
         // show stop button
         runOnUiThread { stopQueueButton?.visibility = View.VISIBLE }
-
         processingJob = lifecycleScope.launch {
             while (commandQueue.isNotEmpty() && isActive) {
                 val item = commandQueue.removeFirst()
@@ -474,7 +438,6 @@ class MainActivity : AppCompatActivity() {
         val infoColor = ContextCompat.getColor(this, R.color.color_info)
         val errorColor = ContextCompat.getColor(this, R.color.color_error)
         val systemYellow = Color.parseColor("#FFD54F")
-
         // ==== NEW: act command (launch activity of any exported app) ====
         if (inputToken == "act") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -486,7 +449,6 @@ class MainActivity : AppCompatActivity() {
             }
             val pkg = parts[1].trim()
             val activityPart = if (parts.size >= 3) parts.drop(2).joinToString(" ").trim() else null
-
             try {
                 val launchIntent: Intent? = when {
                     activityPart.isNullOrBlank() -> {
@@ -511,14 +473,12 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                 }
-
                 if (launchIntent == null) {
                     withContext(Dispatchers.Main) {
                         appendToTerminal(colorize("Error: cannot resolve activity for package '$pkg'\n", errorColor), errorColor)
                     }
                     return "Error: cannot resolve activity"
                 }
-
                 // Try to start activity; catch SecurityException if not exported or protected
                 try {
                     withContext(Dispatchers.Main) {
@@ -544,7 +504,6 @@ class MainActivity : AppCompatActivity() {
                 return "Error: act"
             }
         }
-
         // ==== NEW: shortc command (create a shortcut that runs a terminal command) ====
         if (inputToken == "shortc") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -556,14 +515,12 @@ class MainActivity : AppCompatActivity() {
             }
             val label = parts[1]
             val cmd = parts.drop(2).joinToString(" ")
-
             try {
                 val target = Intent(this, MainActivity::class.java).apply {
                     action = ACTION_RUN_SHORTCUT
                     putExtra(EXTRA_SHORTCUT_CMD, cmd)
                     addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                 }
-
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                     val sm = getSystemService(ShortcutManager::class.java)
                     if (sm != null) {
@@ -586,7 +543,6 @@ class MainActivity : AppCompatActivity() {
                         return "Info: shortcut requested"
                     }
                 }
-
                 // Fallback for older devices / launchers: broadcast INSTALL_SHORTCUT (deprecated but works on some)
                 val install = Intent("com.android.launcher.action.INSTALL_SHORTCUT").apply {
                     putExtra(Intent.EXTRA_SHORTCUT_INTENT, target)
@@ -611,7 +567,6 @@ class MainActivity : AppCompatActivity() {
                 return "Error: shortc failed"
             }
         }
-
         // ==== NEW: bootshell command - show UI for autoload commands ====
         if (inputToken == "bootshell") {
             withContext(Dispatchers.Main) {
@@ -619,7 +574,6 @@ class MainActivity : AppCompatActivity() {
             }
             return "Info: bootshell opened"
         }
-
         // ==== NEW: sleep command ====
         if (inputToken == "sleep") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -638,7 +592,7 @@ class MainActivity : AppCompatActivity() {
                 return "Error: invalid duration"
             }
             withContext(Dispatchers.Main) {
-                appendToTerminal(colorize("Sleeping ${millis}ms...\n", systemYellow), systemYellow)
+                appendToTerminal(colorize("...", systemYellow), systemYellow)
             }
             // suspend without blocking UI
             var remaining = millis
@@ -649,11 +603,10 @@ class MainActivity : AppCompatActivity() {
                 remaining -= to
             }
             withContext(Dispatchers.Main) {
-                appendToTerminal(colorize("Done sleep ${durTok}\n", infoColor), infoColor)
+                appendToTerminal(colorize("....", infoColor), infoColor)
             }
             return "Info: slept ${durTok}"
         }
-
         // ==== NEW: runsyd command (reads script file from SAF root /scripts and injects into inputField) ====
         if (inputToken == "runsyd") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -688,14 +641,12 @@ class MainActivity : AppCompatActivity() {
                     }
                     return "Error: scripts folder missing"
                 }
-
                 // candidate filenames
                 val candidates = if (name.contains('.')) {
                     listOf(name)
                 } else {
                     listOf("$name.syd", "$name.sh", "$name.txt")
                 }
-
                 var found: DocumentFile? = null
                 for (c in candidates) {
                     val f = scriptsDir.findFile(c)
@@ -704,14 +655,12 @@ class MainActivity : AppCompatActivity() {
                         break
                     }
                 }
-
                 if (found == null) {
                     withContext(Dispatchers.Main) {
                         appendToTerminal(colorize("Error: script not found: tried ${candidates.joinToString(", ")}\n", errorColor), errorColor)
                     }
                     return "Error: scripts not found"
                 }
-
                 // Read file text
                 val uri = found.uri
                 val sb = StringBuilder()
@@ -728,9 +677,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     return "Error: cannot open"
                 }
-
                 val content = sb.toString().trimEnd()
-
                 // inject into input field and run as if pasted
                 withContext(Dispatchers.Main) {
                     inputField.setText(content)
@@ -747,7 +694,6 @@ class MainActivity : AppCompatActivity() {
                 return "Error: runsyd failed"
             }
         }
-
         // ==== NEW: random {cmd1-cmd2-cmd3} command ====
         if (inputToken == "random") {
             // syntax: random {cmd1-cmd2-cmd3}
@@ -782,7 +728,6 @@ class MainActivity : AppCompatActivity() {
                 "Error: random execution failed"
             }
         }
-
         // ==== NEW: button (echo: Question - opt1=cmd1 - opt2=cmd2 - ...) ====
         if (inputToken == "button") {
             // extract text inside parentheses
@@ -793,7 +738,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 return "Error: button usage"
             }
-
             // split by '-' delimiter: first part is question (may start with 'echo:')
             val parts = inside.split('-').map { it.trim() }.filter { it.isNotEmpty() }
             if (parts.isEmpty()) {
@@ -802,12 +746,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 return "Error: button parse"
             }
-
             var question = parts[0]
             if (question.lowercase().startsWith("echo:")) {
                 question = question.substringAfter(":", "").trim()
             }
-
             // parse options: label=command
             val opts = parts.drop(1).mapNotNull { p ->
                 val eq = p.indexOf('=')
@@ -822,17 +764,14 @@ class MainActivity : AppCompatActivity() {
                     if (lab.isEmpty() || cmd.isEmpty()) null else lab to cmd
                 }
             }
-
             if (opts.isEmpty()) {
                 withContext(Dispatchers.Main) {
                     appendToTerminal(colorize("Error: button: no options provided (use Option=cmd)\n", errorColor), errorColor)
                 }
                 return "Error: button no options"
             }
-
             val selection = CompletableDeferred<String?>()
             var overlayView: View? = null
-
             // create modal overlay with question and buttons (on main thread)
             withContext(Dispatchers.Main) {
                 try {
@@ -842,7 +781,6 @@ class MainActivity : AppCompatActivity() {
                         setBackgroundColor(Color.parseColor("#800A0A0A")) // alpha 0x80 + #0A0A0A
                         isClickable = true // consume touches
                     }
-
                     val container = LinearLayout(this@MainActivity).apply {
                         orientation = LinearLayout.VERTICAL
                         val pad = (16 * resources.displayMetrics.density).toInt()
@@ -856,7 +794,6 @@ class MainActivity : AppCompatActivity() {
                         // matte dark panel background for button area
                         setBackgroundColor(Color.parseColor("#0A0A0A"))
                     }
-
                     val tv = TextView(this@MainActivity).apply {
                         text = question
                         setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info)) // keep message color
@@ -865,7 +802,6 @@ class MainActivity : AppCompatActivity() {
                         setPadding(padv, padv, padv, padv)
                     }
                     container.addView(tv)
-
                     // buttons column (vertical) — supports many options
                     val btnCol = LinearLayout(this@MainActivity).apply {
                         orientation = LinearLayout.VERTICAL
@@ -896,15 +832,12 @@ class MainActivity : AppCompatActivity() {
                         btnCol.addView(b, blp)
                     }
                     container.addView(btnCol)
-
                     overlay.addView(container)
                     root.addView(overlay, FrameLayout.LayoutParams(
                         FrameLayout.LayoutParams.MATCH_PARENT,
                         FrameLayout.LayoutParams.MATCH_PARENT
                     ))
-
                     overlayView = overlay
-
                     // Also print question into terminal so user sees context in output
                     appendToTerminal(colorize("\n[button] $question\n", infoColor), infoColor)
                     appendToTerminal(colorize("[button] choose one of: ${opts.map { it.first }.joinToString(", ")}\n", infoColor), infoColor)
@@ -914,7 +847,6 @@ class MainActivity : AppCompatActivity() {
                     selection.complete(null)
                 }
             }
-
             // wait for selection or cancellation
             val chosenCmd: String? = try {
                 selection.await()
@@ -931,18 +863,15 @@ class MainActivity : AppCompatActivity() {
                     } catch (_: Throwable) { /* ignore */ }
                 }
             }
-
             if (chosenCmd.isNullOrBlank()) {
                 withContext(Dispatchers.Main) {
                     appendToTerminal(colorize("Button selection cancelled or failed\n", errorColor), errorColor)
                 }
                 return "Error: button cancelled"
             }
-
             withContext(Dispatchers.Main) {
                 appendToTerminal(colorize("Button selected — executing: $chosenCmd\n", infoColor), infoColor)
             }
-
             // execute chosen command (this will block queue until it finishes)
             return try {
                 runSingleCommand(chosenCmd)
@@ -953,7 +882,6 @@ class MainActivity : AppCompatActivity() {
                 "Error: button execution failed"
             }
         }
-
         // Special-case: watchdog — same behavior as before: try service, else fallback timer that reinjects
         if (command.startsWith("watchdog", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
@@ -975,7 +903,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 return "Error: invalid duration"
             }
-
             try {
                 val svcIntent = Intent(this@MainActivity, WatchdogService::class.java).apply {
                     putExtra(WatchdogService.EXTRA_CMD, targetCmd)
@@ -1047,7 +974,6 @@ class MainActivity : AppCompatActivity() {
                 return "Info: watchdog fallback scheduled"
             }
         }
-
         // clear
         if (command.equals("clear", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
@@ -1065,7 +991,6 @@ class MainActivity : AppCompatActivity() {
             }
             return maybe ?: "Info: screen cleared"
         }
-
         // exit
         if (command.equals("exit", ignoreCase = true)) {
             withContext(Dispatchers.Main) {
@@ -1077,7 +1002,6 @@ class MainActivity : AppCompatActivity() {
             }
             return "Info: exit"
         }
-
         // uninstall <pkg> — intent-based, wait for result
         if (inputToken == "uninstall") {
             val parts = command.split("\\s+".toRegex()).filter { it.isNotEmpty() }
@@ -1100,11 +1024,9 @@ class MainActivity : AppCompatActivity() {
                 }
                 return "Error: not installed"
             }
-
             val intent = Intent(Intent.ACTION_UNINSTALL_PACKAGE)
                 .setData(Uri.parse("package:$pkg"))
                 .putExtra(Intent.EXTRA_RETURN_RESULT, true)
-
             pendingIntentCompletion = CompletableDeferred()
             try {
                 intentLauncher.launch(intent)
@@ -1142,7 +1064,6 @@ class MainActivity : AppCompatActivity() {
                 return errMsg
             }
         }
-
         // Other commands: heavy -> IO, else main
         val runInIo = heavyCommands.contains(inputToken)
         if (runInIo) {
@@ -1185,7 +1106,6 @@ class MainActivity : AppCompatActivity() {
         for (line0 in lines) {
             var line = line0.trim()
             if (line.isEmpty()) continue
-
             // If starts with "parallel" -> parse group
             if (line.startsWith("parallel ", ignoreCase = true) || line.startsWith("parallel:", ignoreCase = true)) {
                 // remove keyword
@@ -1197,7 +1117,6 @@ class MainActivity : AppCompatActivity() {
                 }
                 continue
             }
-
             // Now split by separators ; and && preserving conditional semantics
             var i = 0
             val sb = StringBuilder()
@@ -1222,7 +1141,6 @@ class MainActivity : AppCompatActivity() {
             val last = sb.toString().trim()
             if (last.isNotEmpty()) result.add(CommandItem.Single(last, conditionalNext = false, background = last.endsWith(" &")))
         }
-
         // Clean up background markers (remove trailing & from command text) — only for Single items.
         // For Parallel items we leave them as-is.
         return result.map { item ->
@@ -1251,11 +1169,9 @@ class MainActivity : AppCompatActivity() {
             }
             appendToTerminal(colorize(result + "\n", resultColor), resultColor)
         }
-
         val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val autoScroll = prefs.getBoolean("scroll_behavior", true)
         if (autoScroll) scrollToBottom()
-
         // подстраховка: гарантируем, что поле остаётся в фокусе и клавиатура видима
         inputField.post {
             inputField.requestFocus()
@@ -1375,6 +1291,24 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Throwable) { /* ignore */ }
     }
 
+    // <--- secure screenshots: apply FLAG_SECURE according to prefs
+    private fun applySecureFlagFromPrefs() {
+        try {
+            val secure = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean("secure_screenshots", false)
+            if (secure) {
+                window.setFlags(
+                    WindowManager.LayoutParams.FLAG_SECURE,
+                    WindowManager.LayoutParams.FLAG_SECURE
+                )
+            } else {
+                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+            }
+        } catch (_: Throwable) {
+            // не фейлим Activity из-за проблем с prefs/window
+        }
+    }
+
     private fun scrollToBottom() {
         terminalOutput.post {
             val layout = terminalOutput.layout ?: return@post
@@ -1405,12 +1339,10 @@ class MainActivity : AppCompatActivity() {
                 return Single(c, conditionalNext, background)
             }
         }
-
         data class Parallel(val commands: List<String>) : CommandItem()
     }
 
     // ------------------- Boot shell overlay & helpers -------------------
-
     private fun checkBootShellOnStart() {
         try {
             val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -1448,13 +1380,11 @@ class MainActivity : AppCompatActivity() {
                 existing.bringToFront()
                 return
             }
-
             val overlay = FrameLayout(this).apply {
                 tag = "bootshell_overlay"
                 setBackgroundColor(Color.parseColor("#CC000000")) // semi-transparent dark
                 isClickable = true
             }
-
             val container = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
                 val pad = (14 * resources.displayMetrics.density).toInt()
@@ -1470,7 +1400,6 @@ class MainActivity : AppCompatActivity() {
                 layoutParams = lp
                 setBackgroundColor(Color.parseColor("#101010"))
             }
-
             val tv = TextView(this).apply {
                 text = "BootShell — автозагрузка команд\n(вставьте команды; сохраните чтобы включить, очистите чтобы отключить)"
                 setTextColor(ContextCompat.getColor(this@MainActivity, R.color.color_info))
@@ -1478,7 +1407,6 @@ class MainActivity : AppCompatActivity() {
                 setPadding(padv, padv, padv, padv)
             }
             container.addView(tv)
-
             val et = EditText(this).apply {
                 isSingleLine = false
                 minLines = 3
@@ -1495,13 +1423,11 @@ class MainActivity : AppCompatActivity() {
             ).apply {
                 topMargin = (8 * resources.displayMetrics.density).toInt()
             })
-
             // Buttons row: Save | Run Now | Clear | Close
             val btnRow = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.END
             }
-
             val saveBtn = Button(this).apply {
                 text = "Save"
                 isAllCaps = false
@@ -1544,7 +1470,6 @@ class MainActivity : AppCompatActivity() {
                     try { root.removeView(overlay) } catch (_: Throwable) {}
                 }
             }
-
             // style small spacing
             val paramsBtn = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 marginStart = (6 * resources.displayMetrics.density).toInt()
@@ -1553,17 +1478,14 @@ class MainActivity : AppCompatActivity() {
             btnRow.addView(runNowBtn, paramsBtn)
             btnRow.addView(clearBtn, paramsBtn)
             btnRow.addView(closeBtn, paramsBtn)
-
             container.addView(btnRow, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
                 topMargin = (10 * resources.displayMetrics.density).toInt()
             })
-
             overlay.addView(container)
             root.addView(overlay, FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
                 FrameLayout.LayoutParams.MATCH_PARENT
             ))
-
             // if autoRun requested and initialText present -> inject & run
             if (autoRun && initialText.isNotBlank()) {
                 inputField.setText(initialText)
@@ -1579,7 +1501,4 @@ class MainActivity : AppCompatActivity() {
             appendToTerminal(colorize("Error: cannot show bootshell UI: ${t.message}\n", ContextCompat.getColor(this, R.color.color_error)), ContextCompat.getColor(this, R.color.color_error))
         }
     }
-
-    // --------------------------------------------------------------------
-
 }
