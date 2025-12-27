@@ -49,8 +49,6 @@
                 android:fontFamily="monospace"/>
         </LinearLayout>
 
-        <!-- Theme removed -->
-
         <!-- Autoscroll -->
         <LinearLayout
             android:layout_width="match_parent"
@@ -67,6 +65,26 @@
                 android:textColor="@color/terminal_text"/>
             <androidx.appcompat.widget.SwitchCompat
                 android:id="@+id/autoScrollSwitch"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"/>
+        </LinearLayout>
+
+        <!-- Screenshot protection -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:paddingTop="12dp">
+            <TextView
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Защита от скриншотов"
+                android:fontFamily="monospace"
+                android:textColor="@color/terminal_text"/>
+            <androidx.appcompat.widget.SwitchCompat
+                android:id="@+id/secureScreenshotsSwitch"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"/>
         </LinearLayout>
